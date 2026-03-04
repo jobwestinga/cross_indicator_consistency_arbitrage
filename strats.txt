@@ -1,0 +1,63 @@
+Taylor rule (reaction function)
+
+Link: Inflation + slack → policy rate
+
+Use with: CPI/Core CPI/PCE + Unemployment (or GDP) → Fed Decision / Fed Funds ladder
+
+Flag: hot inflation + tight labor, yet near-term cuts priced high
+
+Phillips curve / NAIRU
+
+Link: labor tightness ↔ inflation pressure
+
+Use with: Unemployment ↔ CPI/Core/PCE
+
+Flag: unemployment very low (tight) while inflation priced very low (disinflation), or the reverse
+
+Okun’s law
+
+Link: growth ↔ unemployment
+
+Use with: Real GDP ↔ Unemployment / Payrolls
+
+Flag: strong GDP priced with rising unemployment (or weak GDP with falling unemployment)
+
+Sahm rule
+
+Link: unemployment rise → recession risk
+
+Use with: Unemployment ↔ Recession (Q1/Q2 etc.)
+
+Flag: unemployment jump implied but recession probability stays very low (or vice versa)
+
+Beveridge curve
+
+Link: vacancies ↔ unemployment
+
+Use with: JOLTS/Vacancies ↔ Unemployment
+
+Flag: high vacancies + high unemployment (or low vacancies + low unemployment) without a “shift” story priced
+
+UIP benchmark (rate differentials ↔ FX)
+
+Link: relative rates ↔ expected FX moves
+
+Use with: Fed/BoJ decisions or rate thresholds ↔ USDJPY thresholds
+
+Flag: US–Japan rate differential narrows sharply but USDJPY still priced to rise a lot (or vice versa)
+
+Forward-guidance threshold heuristics (“Evans rule” style)
+
+Link: policy held until inflation/labor thresholds
+
+Use with: Unemployment + Inflation ↔ Fed Decision / Fed Funds ladder
+
+Flag: low inflation + weak labor priced, yet hikes/no-easing priced (or high inflation + tight labor with cuts priced)
+
+Humphrey–Hawkins (dual mandate framing)
+
+Link: Fed reacts to both inflation + employment
+
+Use with: not an equation—use as a “prior” that both inflation and labor should matter for rate pricing
+
+Flag: rate path moves wildly with one side while the other side is priced opposite (helps interpret Taylor/Phillips deviations)
