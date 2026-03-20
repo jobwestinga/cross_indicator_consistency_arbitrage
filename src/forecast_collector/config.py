@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     http_max_retries: int = Field(default=5, alias="HTTP_MAX_RETRIES")
     http_retry_backoff_seconds: float = Field(default=1.0, alias="HTTP_RETRY_BACKOFF_SECONDS")
     http_requests_per_second: float = Field(default=1.0, alias="HTTP_REQUESTS_PER_SECOND")
-    history_periods: list[str] = Field(default_factory=lambda: ["1week", "1month"], alias="HISTORY_PERIODS")
+    history_periods_raw: str = Field(default="1week,1month", alias="HISTORY_PERIODS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     tz: str = Field(default="UTC", alias="TZ")
     sql_directory: Path = Field(default=Path("sql"))
@@ -30,16 +30,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("history_periods", mode="before")
+    @field_validator("history_periods_raw", mode="before")
     @classmethod
-    def parse_history_periods(cls, value: object) -> list[str]:
+    def parse_history_periods(cls, value: object) -> str:
         if value is None:
-            return ["1week", "1month"]
+            return "1week,1month"
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            return value
         if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
+            return ",".join(str(item).strip() for item in value if str(item).strip())
         raise TypeError("HISTORY_PERIODS must be a comma-delimited string or a list")
+
+    @property
+    def history_periods(self) -> list[str]:
+        return [item.strip() for item in self.history_periods_raw.split(",") if item.strip()]
 
 
 def load_settings() -> Settings:
