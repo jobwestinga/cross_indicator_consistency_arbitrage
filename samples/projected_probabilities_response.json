@@ -1,0 +1,12 @@
+[
+  {
+    "expiry": "2025-03-19T19:00:00Z",
+    "strike": 4.5,
+    "probability": 0.42
+  },
+  {
+    "expiry": "2025-03-19T19:00:00Z",
+    "strike": 4.75,
+    "probability": 0.31
+  }
+]

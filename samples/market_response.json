@@ -1,0 +1,29 @@
+{
+  "market_name": "Will the Fed cut rates by March 2025?",
+  "symbol": "FF",
+  "exchange": "FORECASTX",
+  "underlying_conid": 766914406,
+  "logo_category": "rates",
+  "payout": 1.0,
+  "exclude_historical_data": false,
+  "contracts": [
+    {
+      "conid": 767285167,
+      "side": "Y",
+      "strike": 4.5,
+      "strike_label": "Yes",
+      "expiration": "2025-03-19T19:00:00Z",
+      "underlying_conid": 766914406,
+      "product_conid": 777000001
+    },
+    {
+      "conid": 767285168,
+      "side": "N",
+      "strike": 4.5,
+      "strike_label": "No",
+      "expiration": "2025-03-19T19:00:00Z",
+      "underlying_conid": 766914406,
+      "product_conid": 777000001
+    }
+  ]
+}

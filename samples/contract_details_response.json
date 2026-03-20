@@ -1,0 +1,15 @@
+{
+  "conid": 767285167,
+  "question": "Will the effective federal funds target rate be below 4.50% after the March 2025 meeting?",
+  "conid_yes": 767285167,
+  "conid_no": 767285168,
+  "strike": 4.5,
+  "strike_label": "Below 4.50%",
+  "expiration": "2025-03-19T19:00:00Z",
+  "market_name": "Will the Fed cut rates by March 2025?",
+  "symbol": "FF",
+  "underlying_conid": 766914406,
+  "product_conid": 777000001,
+  "measured_period": "March 2025",
+  "measured_period_units": "month"
+}
