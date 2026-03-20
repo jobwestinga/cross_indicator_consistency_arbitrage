@@ -84,13 +84,26 @@ class ForecastTraderClient:
         self._last_request_started_at = time.monotonic()
 
     def _do_request(self, spec: RequestSpec) -> httpx.Response:
-        for attempt in self._retrying:
-            with attempt:
-                self._respect_rate_limit()
-                logger.debug("requesting %s", spec.path)
-                response = self._client.get(spec.path, params=spec.params)
-                response.raise_for_status()
-                return response
+        last_not_found: httpx.HTTPStatusError | None = None
+        candidate_paths = (spec.path, *spec.fallback_paths)
+
+        for path in candidate_paths:
+            try:
+                for attempt in self._retrying:
+                    with attempt:
+                        self._respect_rate_limit()
+                        logger.debug("requesting %s", path)
+                        response = self._client.get(path, params=spec.params)
+                        response.raise_for_status()
+                        return response
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    last_not_found = exc
+                    continue
+                raise
+
+        if last_not_found is not None:
+            raise last_not_found
         raise RuntimeError("Retry loop exited unexpectedly")
 
     def _request(self, spec: RequestSpec) -> ApiResponseEnvelope:

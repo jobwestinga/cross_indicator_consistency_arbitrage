@@ -11,15 +11,17 @@ class ForecastTraderEndpoints:
     def market(self, underlying_conid: int) -> RequestSpec:
         return RequestSpec(
             endpoint_name="market",
-            path=f"{self.public_prefix}/forecasttrader/contract/market",
+            path=f"{self.public_prefix}/forecast/contract/market",
             params={"underlyingConid": underlying_conid, "exchange": self.exchange},
+            fallback_paths=(f"{self.public_prefix}/forecasttrader/contract/market",),
         )
 
     def contract_details(self, conid: int) -> RequestSpec:
         return RequestSpec(
             endpoint_name="contract_details",
-            path=f"{self.public_prefix}/forecasttrader/contract/details",
+            path=f"{self.public_prefix}/forecast/contract/details",
             params={"conid": conid},
+            fallback_paths=(f"{self.public_prefix}/forecasttrader/contract/details",),
         )
 
     def history(self, conid: int, period: str) -> RequestSpec:

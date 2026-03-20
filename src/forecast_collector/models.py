@@ -15,6 +15,7 @@ class RequestSpec:
     endpoint_name: str
     path: str
     params: dict[str, Any]
+    fallback_paths: tuple[str, ...] = ()
 
 
 class ApiResponseEnvelope(BaseModel):
