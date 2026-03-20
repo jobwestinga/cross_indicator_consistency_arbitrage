@@ -63,7 +63,14 @@ def _ensure_sequence(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
-        for key in ("contracts", "items", "data", "results", "projected_probabilities"):
+        for key in (
+            "contracts",
+            "items",
+            "data",
+            "results",
+            "projected_probabilities",
+            "projectedProbabilities",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
@@ -175,14 +182,43 @@ def parse_contract_details_response(
 def parse_history_response(
     payload: dict[str, Any], conid: int, period_requested: str, collected_at: datetime
 ) -> list[HistoryPoint]:
-    times: Iterable[Any] = payload.get("time", [])
-    avgs: Iterable[Any] = payload.get("avg", [])
-    volumes: Iterable[Any] = payload.get("volume", [])
+    nested_items = _ensure_sequence(payload)
+    if nested_items and not any(key in payload for key in ("time", "avg", "volume")):
+        points: list[HistoryPoint] = []
+        chart_step = _first(payload, "chart_step", "chartStep")
+        source = _first(payload, "source", default="Last")
+        for item in nested_items:
+            ts_value = _first(item, "time", "timestamp", "ts", "t")
+            if ts_value is None:
+                continue
+            points.append(
+                HistoryPoint(
+                    conid=conid,
+                    ts_utc=_coerce_datetime(ts_value),
+                    avg=_as_float(_first(item, "avg", "price", "value", "last", "close")),
+                    volume=_as_int(_first(item, "volume", "v")),
+                    chart_step=str(chart_step) if chart_step is not None else None,
+                    source=str(source) if source is not None else None,
+                    period_requested=period_requested,
+                    collected_at=collected_at,
+                )
+            )
+        return points
+
+    times = list(payload.get("time", []) or [])
+    avgs = list(payload.get("avg", []) or [])
+    volumes = list(payload.get("volume", []) or [])
     chart_step = _first(payload, "chart_step", "chartStep")
     source = _first(payload, "source", default="Last")
 
     points: list[HistoryPoint] = []
-    for ts_value, avg_value, volume_value in zip(times, avgs, volumes):
+    max_length = max(len(times), len(avgs), len(volumes), 0)
+    for index in range(max_length):
+        ts_value = times[index] if index < len(times) else None
+        avg_value = avgs[index] if index < len(avgs) else None
+        volume_value = volumes[index] if index < len(volumes) else None
+        if ts_value is None:
+            continue
         points.append(
             HistoryPoint(
                 conid=conid,
@@ -225,6 +261,14 @@ def parse_open_interest_response(
         raise ValueError("Open interest response list has no matching contract id")
 
     if isinstance(payload, dict):
+        nested_items = _ensure_sequence(payload)
+        if nested_items:
+            return parse_open_interest_response(
+                nested_items,
+                collected_at=collected_at,
+                requested_conid=requested_conid,
+            )
+
         conid = _as_int(_first(payload, "conid", "contract_id", "id"))
         if conid is None:
             conid = requested_conid

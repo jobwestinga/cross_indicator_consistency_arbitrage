@@ -109,6 +109,46 @@ def test_parse_history_response_creates_points() -> None:
     assert points[0].avg == 0.42
 
 
+def test_parse_history_response_handles_missing_volume_array() -> None:
+    payload = {
+        "time": [1731283200000, 1731369600000],
+        "avg": [0.42, 0.45],
+        "chart_step": "1d",
+        "source": "Last",
+    }
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    points = parse_history_response(
+        payload,
+        conid=767285167,
+        period_requested="1week",
+        collected_at=collected_at,
+    )
+
+    assert len(points) == 2
+    assert points[0].volume is None
+
+
+def test_parse_history_response_handles_nested_data_objects() -> None:
+    payload = {
+        "data": [
+            {"time": 1731283200000, "avg": 0.42, "volume": 120},
+            {"time": 1731369600000, "avg": 0.45, "volume": 180},
+        ],
+        "chart_step": "1d",
+        "source": "Last",
+    }
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    points = parse_history_response(
+        payload,
+        conid=767285167,
+        period_requested="1week",
+        collected_at=collected_at,
+    )
+
+    assert len(points) == 2
+    assert points[1].volume == 180
+
+
 def test_parse_open_interest_response_creates_snapshot() -> None:
     payload = _load_sample("open_interest_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
@@ -129,6 +169,19 @@ def test_parse_open_interest_response_uses_requested_conid_for_scalar_map() -> N
 
 def test_parse_open_interest_response_uses_requested_conid_when_payload_has_no_id() -> None:
     payload = {"open_interest": 107000}
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    snapshot = parse_open_interest_response(
+        payload,
+        collected_at,
+        requested_conid=767285167,
+    )
+
+    assert snapshot.conid == 767285167
+    assert snapshot.open_interest == 107000
+
+
+def test_parse_open_interest_response_handles_nested_results() -> None:
+    payload = {"results": [{"id": "767285167", "open_interest": "107000"}]}
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
     snapshot = parse_open_interest_response(
         payload,
