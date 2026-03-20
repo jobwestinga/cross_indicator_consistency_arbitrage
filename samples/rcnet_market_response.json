@@ -1,0 +1,27 @@
+{
+  "market_name": "Northeastern US CPI",
+  "symbol": "RCNET",
+  "exchange": "FORECASTX",
+  "contracts": [
+    {
+      "conid": 831078527,
+      "side": "Y",
+      "expiration": "20270113",
+      "strike": 334.0,
+      "strike_label": "Above 334",
+      "expiry_label": "December 2026",
+      "underlying_conid": 831072285,
+      "time_specifier": "2026.12"
+    },
+    {
+      "conid": 831078528,
+      "side": "N",
+      "expiration": "20270113",
+      "strike": 334.0,
+      "strike_label": "At or below 334",
+      "expiry_label": "December 2026",
+      "underlying_conid": 831072285,
+      "time_specifier": "2026.12"
+    }
+  ]
+}

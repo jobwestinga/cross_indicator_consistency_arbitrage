@@ -1,95 +1,149 @@
 # ForecastTrader Collector
 
-Server-side collector for IBKR ForecastTrader public endpoints. The initial
-scope is market structure ingestion:
+HTTP collector for IBKR ForecastTrader public endpoints. The codebase now
+supports:
 
-- discover one market by `underlyingConid`
-- store market metadata and contract ladders
-- enrich every contract through the details endpoint
-- capture every HTTP response as raw JSON for auditing and reprocessing
+- category-tree discovery for all public markets
+- market structure collection for one market or all discovered markets
+- contract-details enrichment
+- batched open-interest collection
+- projected probability collection
+- history collection in `backfill` or `incremental` mode
+- raw payload capture for every request
+- health reporting
+- host-level `systemd` timer generation
 
-The project is intentionally built around direct HTTP requests to the public
-ForecastTrader frontend endpoints. It does not require an IBKR login, browser
-automation, or DOM scraping.
+Realtime/websocket ingestion is intentionally out of scope until the HTTP
+pipeline is stable in production.
 
-## Status
+## Implemented Commands
 
-Implemented in this repo:
+```bash
+python -m forecast_collector.cli migrate
+python -m forecast_collector.cli discover-markets
+python -m forecast_collector.cli collect-seed-market --underlying-conid 793085688
+python -m forecast_collector.cli collect-market-structures --all-discovered
+python -m forecast_collector.cli collect-open-interest --all-discovered
+python -m forecast_collector.cli collect-probabilities --all-discovered
+python -m forecast_collector.cli collect-history --all-discovered --mode backfill
+python -m forecast_collector.cli collect-history --all-discovered --mode incremental
+python -m forecast_collector.cli report-health
+```
 
-- Python package scaffold
-- Postgres schema migrations
-- HTTP client with retry and pacing hooks
-- Parsers for market, contract details, history, open interest, and projected
-  probabilities
-- Repository layer for raw responses and normalized tables
-- CLI commands for `migrate`, `collect-seed-market`, `collect-history`,
-  `collect-open-interest`, and `collect-probabilities`
-- Sample payload fixtures and parser tests
+The original single-market commands are preserved for debugging and regression
+checks.
 
-Not yet productionized:
+## Current Validation Markets
 
-- scheduler execution loop
-- category tree discovery
-- websocket subscription consumer
-- snapshot field decoding
+Two public markets have already been used to validate the live endpoint
+behavior:
+
+- `831072285` (`RCNET`, Northeastern US CPI)
+  - useful structure canary
+  - sparse upstream data is valid and should not fail collection
+- `793085688` (`CBBTC`, BTC Price)
+  - active canary for structure, open interest, probabilities, and history
 
 ## Quick Start
 
-1. Copy `.env.example` to `.env` and set `DATABASE_URL`.
-2. Install dependencies with `pip install -e .`.
-3. Run migrations:
+1. Create `.env` with at least:
+
+```dotenv
+DATABASE_URL=postgresql://forecast:forecast@postgres:5432/forecast
+IBKR_BASE_URL=https://forecasttrader.interactivebrokers.ie
+IBKR_PUBLIC_PREFIX=/tws.proxy/public
+IBKR_EXCHANGE=FORECASTX
+HISTORY_PERIODS=1week,1month
+LOG_LEVEL=INFO
+```
+
+`HISTORY_PERIODS` accepts either comma-delimited text or JSON array form:
+
+```dotenv
+HISTORY_PERIODS=1week,1month
+HISTORY_PERIODS=["1week","1month"]
+```
+
+2. Run migrations:
 
 ```bash
 python -m forecast_collector.cli migrate
 ```
 
-4. Collect a single market:
+3. Discover markets:
 
 ```bash
-python -m forecast_collector.cli collect-seed-market --underlying-conid 766914406
+python -m forecast_collector.cli discover-markets
 ```
 
-5. Collect historical series, open interest, and projected probabilities once
-   the base market has been ingested:
+4. Refresh structure for all discovered markets:
 
 ```bash
-python -m forecast_collector.cli collect-history --underlying-conid 766914406
-python -m forecast_collector.cli collect-open-interest --underlying-conid 766914406
-python -m forecast_collector.cli collect-probabilities --underlying-conid 766914406
+python -m forecast_collector.cli collect-market-structures --all-discovered
+```
+
+5. Collect time-varying data:
+
+```bash
+python -m forecast_collector.cli collect-open-interest --all-discovered
+python -m forecast_collector.cli collect-probabilities --all-discovered
+python -m forecast_collector.cli collect-history --all-discovered --mode incremental
 ```
 
 ## Docker Compose
 
-The repository includes a minimal `docker-compose.yml` with:
+The repository includes:
 
 - `postgres` for storage
-- `collector` as a manual CLI container
+- `collector` for one-shot CLI jobs
 
 Typical usage:
 
 ```bash
 docker compose up -d postgres
 docker compose run --rm collector migrate
-docker compose run --rm collector collect-seed-market --underlying-conid 766914406
+docker compose run --rm collector discover-markets
+docker compose run --rm collector collect-market-structures --all-discovered
+docker compose run --rm collector collect-open-interest --all-discovered
+docker compose run --rm collector collect-probabilities --all-discovered
+docker compose run --rm collector collect-history --all-discovered --mode incremental
 ```
+
+## Scheduling
+
+Host-level `systemd` timers are the default scheduling model. Generate unit
+files with:
+
+```bash
+python -m forecast_collector.scheduler \
+  --workdir /srv/cross_indicator_consistency_arbitrage \
+  --output-dir deploy/systemd/generated
+```
+
+See `deploy/systemd/README.md` for installation steps.
 
 ## Layout
 
 ```text
 .
+├── deploy/systemd/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
-├── sql/
 ├── samples/
+├── sql/
 ├── src/forecast_collector/
 └── tests/
 ```
 
-## Notes
+## Operational Notes
 
-- The public host could not be resolved from the local shell in this
-  environment, so the included fixtures are synthetic payloads based on the
-  endpoint shapes already documented.
-- Replace the synthetic sample payloads with real captures from DevTools as
-  soon as you have them.
+- Category tree discovery marks disappeared markets inactive but does not delete
+  them.
+- `contract_history` preserves `period_requested`, so `1week` and `1month`
+  responses can coexist for the same timestamp.
+- Open-interest batching uses repeated `id=` query params with a configurable
+  batch size (`OPEN_INTEREST_BATCH_SIZE`, default `50`).
+- Raw responses remain append-only for replay and debugging.
+- PostgreSQL advisory locks prevent overlapping runs for the same job type when
+  driven by host timers.

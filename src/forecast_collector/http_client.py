@@ -65,11 +65,17 @@ class ForecastTraderClient:
     def get_contract_details(self, conid: int) -> ApiResponseEnvelope:
         return self._request(self.endpoints.contract_details(conid))
 
+    def get_category_tree(self) -> ApiResponseEnvelope:
+        return self._request(self.endpoints.category_tree())
+
     def get_history(self, conid: int, period: str) -> ApiResponseEnvelope:
         return self._request(self.endpoints.history(conid, period))
 
     def get_open_interest(self, conid: int) -> ApiResponseEnvelope:
         return self._request(self.endpoints.open_interest(conid))
+
+    def get_open_interest_batch(self, conids: list[int]) -> ApiResponseEnvelope:
+        return self._request(self.endpoints.open_interest(conids))
 
     def get_projected_probabilities(self, underlying_conid: int) -> ApiResponseEnvelope:
         return self._request(self.endpoints.projected_probabilities(underlying_conid))

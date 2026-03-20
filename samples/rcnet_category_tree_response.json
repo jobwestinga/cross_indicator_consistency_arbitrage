@@ -1,0 +1,16 @@
+{
+  "categories": {
+    "inflation": {
+      "name": "Inflation",
+      "markets": [
+        {
+          "name": "Northeastern US CPI",
+          "symbol": "RCNET",
+          "exchange": "FORECASTX",
+          "conid": 831072285,
+          "productConid": 831072289
+        }
+      ]
+    }
+  }
+}

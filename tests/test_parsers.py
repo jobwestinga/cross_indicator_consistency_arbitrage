@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from forecast_collector.parsers import (
+    parse_category_tree_response,
     parse_contract_details_response,
     parse_history_response,
     parse_market_response,
+    parse_open_interest_batch_response,
     parse_open_interest_response,
     parse_projected_probabilities_response,
 )
@@ -20,16 +22,29 @@ def _load_sample(name: str) -> dict | list:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
 
 
-def test_parse_market_response_extracts_market_and_contracts() -> None:
-    payload = _load_sample("market_response.json")
+def test_parse_category_tree_response_extracts_categories_and_markets() -> None:
+    payload = _load_sample("rcnet_category_tree_response.json")
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    categories, markets = parse_category_tree_response(payload, collected_at)
+
+    assert len(categories) == 1
+    assert categories[0].category_key == "inflation"
+    assert len(markets) == 1
+    assert markets[0].underlying_conid == 831072285
+    assert markets[0].category_key == "inflation"
+    assert markets[0].product_conid == 831072289
+
+
+def test_parse_market_response_handles_rcnet_shape_without_root_underlying_conid() -> None:
+    payload = _load_sample("rcnet_market_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
     market, contracts = parse_market_response(payload, collected_at)
 
-    assert market.underlying_conid == 766914406
-    assert market.symbol == "FF"
-    assert market.market_name.startswith("Will the Fed")
+    assert market.underlying_conid == 831072285
+    assert market.market_name == "Northeastern US CPI"
     assert len(contracts) == 2
-    assert {contract.side for contract in contracts} == {"Y", "N"}
+    assert contracts[0].expiry_label == "December 2026"
+    assert contracts[0].time_specifier == "2026.12"
 
 
 def test_parse_market_response_uses_explicit_fallback_when_root_key_missing() -> None:
@@ -57,20 +72,20 @@ def test_parse_market_response_uses_explicit_fallback_when_root_key_missing() ->
 
 
 def test_parse_contract_details_response_extracts_question_and_links() -> None:
-    payload = _load_sample("contract_details_response.json")
+    payload = _load_sample("rcnet_contract_details_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
     contract = parse_contract_details_response(
         payload,
         collected_at,
-        fallback_underlying_conid=766914406,
-        requested_conid=767285167,
+        fallback_underlying_conid=831072285,
+        requested_conid=831078527,
     )
 
-    assert contract.conid == 767285167
+    assert contract.conid == 831078527
     assert contract.question is not None
-    assert contract.conid_yes == 767285167
-    assert contract.conid_no == 767285168
-    assert contract.measured_period == "March 2025"
+    assert contract.conid_yes == 831078527
+    assert contract.conid_no == 831078528
+    assert contract.measured_period == "December 2026"
 
 
 def test_parse_contract_details_response_prefers_requested_conid_when_root_key_missing() -> None:
@@ -99,14 +114,32 @@ def test_parse_contract_details_response_prefers_requested_conid_when_root_key_m
 
 
 def test_parse_history_response_creates_points() -> None:
-    payload = _load_sample("history_response.json")
+    payload = _load_sample("btc_history_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
-    points = parse_history_response(payload, conid=767285167, period_requested="1week", collected_at=collected_at)
+    points = parse_history_response(
+        payload,
+        conid=865204189,
+        period_requested="1week",
+        collected_at=collected_at,
+    )
 
-    assert len(points) == 3
-    assert points[0].conid == 767285167
+    assert len(points) == 2
+    assert points[0].conid == 865204189
     assert points[0].period_requested == "1week"
-    assert points[0].avg == 0.42
+    assert points[0].avg == 0.44
+
+
+def test_parse_history_response_handles_no_data_response() -> None:
+    payload = _load_sample("rcnet_history_response.json")
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    points = parse_history_response(
+        payload,
+        conid=831078527,
+        period_requested="1month",
+        collected_at=collected_at,
+    )
+
+    assert points == []
 
 
 def test_parse_history_response_handles_missing_volume_array() -> None:
@@ -158,15 +191,6 @@ def test_parse_open_interest_response_creates_snapshot() -> None:
     assert snapshot.open_interest == 107000
 
 
-def test_parse_open_interest_response_uses_requested_conid_for_scalar_map() -> None:
-    payload = {"107000": 42}
-    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
-    snapshot = parse_open_interest_response(payload, collected_at, requested_conid=767285167)
-
-    assert snapshot.conid == 107000
-    assert snapshot.open_interest == 42
-
-
 def test_parse_open_interest_response_uses_requested_conid_when_payload_has_no_id() -> None:
     payload = {"open_interest": 107000}
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
@@ -180,24 +204,33 @@ def test_parse_open_interest_response_uses_requested_conid_when_payload_has_no_i
     assert snapshot.open_interest == 107000
 
 
-def test_parse_open_interest_response_handles_nested_results() -> None:
-    payload = {"results": [{"id": "767285167", "open_interest": "107000"}]}
+def test_parse_open_interest_batch_response_handles_nested_results_and_blank_values() -> None:
+    payload = _load_sample("btc_open_interest_batch_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
-    snapshot = parse_open_interest_response(
+    batch = parse_open_interest_batch_response(
         payload,
         collected_at,
-        requested_conid=767285167,
+        requested_conids=[865204189, 865204190, 999999999],
     )
 
-    assert snapshot.conid == 767285167
-    assert snapshot.open_interest == 107000
+    assert len(batch.snapshots) == 2
+    assert batch.blank_value_count == 1
+    assert batch.missing_conids == [999999999]
+
+
+def test_parse_projected_probabilities_response_handles_empty_rcnet_shape() -> None:
+    payload = _load_sample("rcnet_projected_probabilities_response.json")
+    collected_at = datetime(2026, 3, 20, tzinfo=UTC)
+    rows = parse_projected_probabilities_response(payload, 831072285, collected_at)
+
+    assert rows == []
 
 
 def test_parse_projected_probabilities_response_creates_rows() -> None:
-    payload = _load_sample("projected_probabilities_response.json")
+    payload = _load_sample("btc_projected_probabilities_response.json")
     collected_at = datetime(2026, 3, 20, tzinfo=UTC)
-    rows = parse_projected_probabilities_response(payload, 766914406, collected_at)
+    rows = parse_projected_probabilities_response(payload, 793085688, collected_at)
 
     assert len(rows) == 2
-    assert rows[0].underlying_conid == 766914406
-    assert rows[0].strike == 4.5
+    assert rows[0].underlying_conid == 793085688
+    assert rows[0].strike == 63000.0

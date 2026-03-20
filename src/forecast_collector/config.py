@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     ibkr_public_prefix: str = Field(default="/tws.proxy/public", alias="IBKR_PUBLIC_PREFIX")
     ibkr_exchange: str = Field(default="FORECASTX", alias="IBKR_EXCHANGE")
     seed_underlying_conid: int | None = Field(default=None, alias="SEED_UNDERLYING_CONID")
+    open_interest_batch_size: int = Field(default=50, alias="OPEN_INTEREST_BATCH_SIZE")
     http_timeout_seconds: float = Field(default=20.0, alias="HTTP_TIMEOUT_SECONDS")
     http_max_retries: int = Field(default=5, alias="HTTP_MAX_RETRIES")
     http_retry_backoff_seconds: float = Field(default=1.0, alias="HTTP_RETRY_BACKOFF_SECONDS")
@@ -36,14 +38,23 @@ class Settings(BaseSettings):
         if value is None:
             return "1week,1month"
         if isinstance(value, str):
-            return value
+            stripped = value.strip()
+            if not stripped:
+                return "1week,1month"
+            return stripped
         if isinstance(value, list):
-            return ",".join(str(item).strip() for item in value if str(item).strip())
+            return json.dumps([str(item).strip() for item in value if str(item).strip()])
         raise TypeError("HISTORY_PERIODS must be a comma-delimited string or a list")
 
     @property
     def history_periods(self) -> list[str]:
-        return [item.strip() for item in self.history_periods_raw.split(",") if item.strip()]
+        raw = self.history_periods_raw.strip()
+        if raw.startswith("["):
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+                raise TypeError("HISTORY_PERIODS JSON value must decode to a list")
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def load_settings() -> Settings:

@@ -1,0 +1,12 @@
+{
+  "question": "Will the CPI in the Northeastern US exceed 334 in December 2026?",
+  "conid_yes": 831078527,
+  "conid_no": 831078528,
+  "underlying_conid": 831072285,
+  "symbol": "RCNET",
+  "market_name": "Northeastern US CPI",
+  "strike": 334.0,
+  "side": "Y",
+  "measured_period": "December 2026",
+  "measured_period_units": "month"
+}

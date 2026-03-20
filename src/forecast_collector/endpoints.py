@@ -11,17 +11,25 @@ class ForecastTraderEndpoints:
     def market(self, underlying_conid: int) -> RequestSpec:
         return RequestSpec(
             endpoint_name="market",
-            path=f"{self.public_prefix}/forecast/contract/market",
+            path=f"{self.public_prefix}/forecasttrader/contract/market",
             params={"underlyingConid": underlying_conid, "exchange": self.exchange},
-            fallback_paths=(f"{self.public_prefix}/forecasttrader/contract/market",),
+            fallback_paths=(f"{self.public_prefix}/forecast/contract/market",),
         )
 
     def contract_details(self, conid: int) -> RequestSpec:
         return RequestSpec(
             endpoint_name="contract_details",
-            path=f"{self.public_prefix}/forecast/contract/details",
+            path=f"{self.public_prefix}/forecasttrader/contract/details",
             params={"conid": conid},
-            fallback_paths=(f"{self.public_prefix}/forecasttrader/contract/details",),
+            fallback_paths=(f"{self.public_prefix}/forecast/contract/details",),
+        )
+
+    def category_tree(self) -> RequestSpec:
+        return RequestSpec(
+            endpoint_name="category_tree",
+            path=f"{self.public_prefix}/forecasttrader/category/tree",
+            params={},
+            fallback_paths=(f"{self.public_prefix}/forecast/category/tree",),
         )
 
     def history(self, conid: int, period: str) -> RequestSpec:
@@ -36,11 +44,11 @@ class ForecastTraderEndpoints:
             },
         )
 
-    def open_interest(self, conid: int) -> RequestSpec:
+    def open_interest(self, conids: int | list[int]) -> RequestSpec:
         return RequestSpec(
             endpoint_name="open_interest",
             path=f"{self.public_prefix}/event-contract/market-open-interest",
-            params={"id": conid},
+            params={"id": conids},
         )
 
     def projected_probabilities(self, underlying_conid: int) -> RequestSpec:

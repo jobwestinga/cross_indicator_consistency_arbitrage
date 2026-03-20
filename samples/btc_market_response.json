@@ -1,0 +1,27 @@
+{
+  "market_name": "BTC Price",
+  "symbol": "CBBTC",
+  "exchange": "FORECASTX",
+  "contracts": [
+    {
+      "conid": 865204189,
+      "side": "Y",
+      "expiration": "20260410",
+      "strike": 63000.0,
+      "strike_label": "Above 63000",
+      "expiry_label": "April 2026",
+      "underlying_conid": 793085688,
+      "time_specifier": "2026.04"
+    },
+    {
+      "conid": 865204190,
+      "side": "N",
+      "expiration": "20260410",
+      "strike": 63000.0,
+      "strike_label": "At or below 63000",
+      "expiry_label": "April 2026",
+      "underlying_conid": 793085688,
+      "time_specifier": "2026.04"
+    }
+  ]
+}

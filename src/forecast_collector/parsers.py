@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Iterable
 
-from .models import ContractRecord, HistoryPoint, MarketRecord, OpenInterestSnapshot, ProjectedProbability
+from .models import (
+    CategoryRecord,
+    ContractRecord,
+    HistoryPoint,
+    MarketRecord,
+    OpenInterestBatchResult,
+    OpenInterestSnapshot,
+    ProjectedProbability,
+)
 
 
 def _first(payload: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -77,6 +85,72 @@ def _ensure_sequence(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def parse_category_tree_response(
+    payload: dict[str, Any],
+    collected_at: datetime,
+) -> tuple[list[CategoryRecord], list[MarketRecord]]:
+    categories: dict[str, CategoryRecord] = {}
+    markets: dict[int, MarketRecord] = {}
+
+    def walk_category_node(
+        key: str,
+        node: dict[str, Any],
+        parent_category_key: str | None = None,
+    ) -> None:
+        category_key = str(_first(node, "key", "id", default=key))
+        category_name = str(_first(node, "name", "label", "title", default=category_key))
+        categories[category_key] = CategoryRecord(
+            category_key=category_key,
+            category_name=category_name,
+            parent_category_key=parent_category_key,
+            first_seen_at=collected_at,
+            last_seen_at=collected_at,
+        )
+
+        for market_payload in node.get("markets", []) or []:
+            if not isinstance(market_payload, dict):
+                continue
+            underlying_conid = _as_int(_first(market_payload, "conid", "underlying_conid"))
+            if underlying_conid is None:
+                continue
+            markets[underlying_conid] = MarketRecord(
+                underlying_conid=underlying_conid,
+                market_name=str(_first(market_payload, "name", "market_name", default="")),
+                symbol=str(_first(market_payload, "symbol", default="")),
+                exchange=str(_first(market_payload, "exchange", default="")),
+                product_conid=_as_int(_first(market_payload, "product_conid", "productConid")),
+                category_key=category_key,
+                first_seen_at=collected_at,
+                last_seen_at=collected_at,
+                last_discovered_at=collected_at,
+            )
+
+        for child_key in ("categories", "children", "subcategories"):
+            child_value = node.get(child_key)
+            if isinstance(child_value, dict):
+                for nested_key, nested_node in child_value.items():
+                    if isinstance(nested_node, dict):
+                        walk_category_node(str(nested_key), nested_node, category_key)
+            elif isinstance(child_value, list):
+                for index, nested_node in enumerate(child_value):
+                    if isinstance(nested_node, dict):
+                        nested_key = str(_first(nested_node, "key", "id", default=f"{category_key}.{index}"))
+                        walk_category_node(nested_key, nested_node, category_key)
+
+    root_categories = payload.get("categories", payload)
+    if isinstance(root_categories, dict):
+        for key, node in root_categories.items():
+            if isinstance(node, dict):
+                walk_category_node(str(key), node)
+    elif isinstance(root_categories, list):
+        for index, node in enumerate(root_categories):
+            if isinstance(node, dict):
+                key = str(_first(node, "key", "id", default=f"category.{index}"))
+                walk_category_node(key, node)
+
+    return list(categories.values()), list(markets.values())
+
+
 def parse_market_response(
     payload: dict[str, Any],
     collected_at: datetime,
@@ -102,6 +176,7 @@ def parse_market_response(
         market_name=str(_first(payload, "market_name", "marketName", default="")),
         symbol=str(_first(payload, "symbol", default="")),
         exchange=str(_first(payload, "exchange", default="")),
+        product_conid=_as_int(_first(payload, "product_conid", "productConid")),
         logo_category=_first(payload, "logo_category", "logoCategory"),
         payout=_as_float(_first(payload, "payout")),
         exclude_historical_data=_as_bool(
@@ -109,6 +184,7 @@ def parse_market_response(
         ),
         first_seen_at=collected_at,
         last_seen_at=collected_at,
+        last_structure_collected_at=collected_at,
     )
 
     contracts: list[ContractRecord] = []
@@ -127,10 +203,14 @@ def parse_market_response(
                 strike=_as_float(_first(item, "strike")),
                 strike_label=_first(item, "strike_label", "strikeLabel"),
                 expiration=_first(item, "expiration"),
+                expiry_label=_first(item, "expiry_label", "expiryLabel"),
+                time_specifier=_first(item, "time_specifier", "timeSpecifier"),
                 question=None,
                 conid_yes=None,
                 conid_no=None,
-                product_conid=_as_int(_first(item, "product_conid", "productConid")),
+                product_conid=_as_int(
+                    _first(item, "product_conid", "productConid", default=market.product_conid)
+                ),
                 market_name=market.market_name,
                 symbol=market.symbol,
                 measured_period=_first(item, "measured_period", "measuredPeriod"),
@@ -166,6 +246,8 @@ def parse_contract_details_response(
         strike=_as_float(_first(payload, "strike")),
         strike_label=_first(payload, "strike_label", "strikeLabel"),
         expiration=_first(payload, "expiration"),
+        expiry_label=_first(payload, "expiry_label", "expiryLabel"),
+        time_specifier=_first(payload, "time_specifier", "timeSpecifier"),
         question=_first(payload, "question"),
         conid_yes=_as_int(_first(payload, "conid_yes", "conidYes")),
         conid_no=_as_int(_first(payload, "conid_no", "conidNo")),
@@ -176,6 +258,7 @@ def parse_contract_details_response(
         measured_period_units=_first(payload, "measured_period_units", "measuredPeriodUnits"),
         first_seen_at=collected_at,
         last_seen_at=collected_at,
+        last_details_collected_at=collected_at,
     )
 
 
@@ -297,6 +380,54 @@ def parse_open_interest_response(
         )
 
     raise ValueError("Unsupported open interest response shape")
+
+
+def parse_open_interest_batch_response(
+    payload: Any,
+    collected_at: datetime,
+    requested_conids: Iterable[int],
+) -> OpenInterestBatchResult:
+    requested = [int(conid) for conid in requested_conids]
+    requested_set = set(requested)
+    items = _ensure_sequence(payload)
+    if not items and isinstance(payload, list):
+        items = [item for item in payload if isinstance(item, dict)]
+    if not items:
+        items = [payload] if isinstance(payload, dict) else []
+
+    snapshots: list[OpenInterestSnapshot] = []
+    seen_conids: set[int] = set()
+    blank_value_count = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        conid = _as_int(_first(item, "conid", "contract_id", "id"))
+        if conid is None and len(item) == 1:
+            only_key, only_value = next(iter(item.items()))
+            if str(only_key).isdigit():
+                conid = int(str(only_key))
+                item = {"id": only_key, "open_interest": only_value}
+        if conid is None or (requested_set and conid not in requested_set):
+            continue
+        open_interest_raw = _first(item, "open_interest", "openInterest")
+        if open_interest_raw in (None, ""):
+            blank_value_count += 1
+        snapshots.append(
+            OpenInterestSnapshot(
+                conid=conid,
+                open_interest=_as_int(open_interest_raw),
+                collected_at=collected_at,
+            )
+        )
+        seen_conids.add(conid)
+
+    missing_conids = sorted(requested_set - seen_conids)
+    return OpenInterestBatchResult(
+        snapshots=snapshots,
+        blank_value_count=blank_value_count,
+        missing_conids=missing_conids,
+    )
 
 
 def parse_projected_probabilities_response(
