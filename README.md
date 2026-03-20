@@ -96,17 +96,26 @@ The repository includes:
 
 - `postgres` for storage
 - `collector` for one-shot CLI jobs
+- `tester` for running the test suite inside Docker
 
 Typical usage:
 
 ```bash
 docker compose up -d postgres
+docker compose build collector tester
+docker compose run --rm tester
 docker compose run --rm collector migrate
 docker compose run --rm collector discover-markets
 docker compose run --rm collector collect-market-structures --all-discovered
 docker compose run --rm collector collect-open-interest --all-discovered
 docker compose run --rm collector collect-probabilities --all-discovered
 docker compose run --rm collector collect-history --all-discovered --mode incremental
+```
+
+Run a specific test module:
+
+```bash
+docker compose run --rm tester tests/test_repository.py -q
 ```
 
 ## Scheduling

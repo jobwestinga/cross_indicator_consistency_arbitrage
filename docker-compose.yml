@@ -25,5 +25,22 @@ services:
     working_dir: /app
     entrypoint: ["python", "-m", "forecast_collector.cli"]
 
+  tester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src
+      TEST_DATABASE_URL: postgresql://forecast:forecast@postgres:5432/forecast
+    depends_on:
+      - postgres
+    volumes:
+      - .:/app
+    working_dir: /app
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["-q"]
+
 volumes:
   postgres_data:
