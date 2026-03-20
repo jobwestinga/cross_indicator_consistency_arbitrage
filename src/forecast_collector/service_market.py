@@ -20,7 +20,9 @@ class MarketCollectorService:
             self.repository.record_raw_response(run_id, market_response)
 
             market, contracts = parse_market_response(
-                market_response.response_json, collected_at=market_response.fetched_at
+                market_response.response_json,
+                collected_at=market_response.fetched_at,
+                fallback_underlying_conid=underlying_conid,
             )
             self.repository.upsert_market(market)
             summary.markets_processed = 1
@@ -37,6 +39,7 @@ class MarketCollectorService:
                     details_response.response_json,
                     collected_at=details_response.fetched_at,
                     fallback_underlying_conid=market.underlying_conid,
+                    requested_conid=conid,
                 )
                 self.repository.upsert_contract(stub.merge(enriched))
 

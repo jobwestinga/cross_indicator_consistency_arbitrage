@@ -20,7 +20,9 @@ class OpenInterestCollectorService:
                 response = self.client.get_open_interest(int(contract["conid"]))
                 self.repository.record_raw_response(run_id, response)
                 snapshot = parse_open_interest_response(
-                    response.response_json, collected_at=response.fetched_at
+                    response.response_json,
+                    collected_at=response.fetched_at,
+                    requested_conid=int(contract["conid"]),
                 )
                 self.repository.insert_open_interest_snapshot(snapshot)
                 summary.open_interest_points_inserted += 1

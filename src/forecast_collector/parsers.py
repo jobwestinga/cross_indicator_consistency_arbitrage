@@ -70,10 +70,23 @@ def _ensure_sequence(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def parse_market_response(payload: dict[str, Any], collected_at: datetime) -> tuple[MarketRecord, list[ContractRecord]]:
+def parse_market_response(
+    payload: dict[str, Any],
+    collected_at: datetime,
+    fallback_underlying_conid: int | None = None,
+) -> tuple[MarketRecord, list[ContractRecord]]:
+    contract_items = _ensure_sequence(payload)
     underlying_conid = _as_int(
         _first(payload, "underlying_conid", "underlyingConid", "und_conid")
     )
+    if underlying_conid is None:
+        underlying_conid = fallback_underlying_conid
+    if underlying_conid is None:
+        for item in contract_items:
+            inferred = _as_int(_first(item, "underlying_conid", "underlyingConid", "und_conid"))
+            if inferred is not None:
+                underlying_conid = inferred
+                break
     if underlying_conid is None:
         raise ValueError("Market response missing underlying conid")
 
@@ -92,7 +105,7 @@ def parse_market_response(payload: dict[str, Any], collected_at: datetime) -> tu
     )
 
     contracts: list[ContractRecord] = []
-    for item in _ensure_sequence(payload):
+    for item in contract_items:
         conid = _as_int(_first(item, "conid", "id"))
         if conid is None:
             continue
@@ -123,9 +136,14 @@ def parse_market_response(payload: dict[str, Any], collected_at: datetime) -> tu
 
 
 def parse_contract_details_response(
-    payload: dict[str, Any], collected_at: datetime, fallback_underlying_conid: int | None = None
+    payload: dict[str, Any],
+    collected_at: datetime,
+    fallback_underlying_conid: int | None = None,
+    requested_conid: int | None = None,
 ) -> ContractRecord:
     conid = _as_int(_first(payload, "conid", "contract_id", "id"))
+    if conid is None:
+        conid = requested_conid
     if conid is None:
         conid = _as_int(_first(payload, "conid_yes", "conidYes", "conid_no", "conidNo"))
     underlying_conid = _as_int(
@@ -180,15 +198,61 @@ def parse_history_response(
     return points
 
 
-def parse_open_interest_response(payload: dict[str, Any], collected_at: datetime) -> OpenInterestSnapshot:
-    conid = _as_int(_first(payload, "conid", "contract_id", "id"))
-    if conid is None:
-        raise ValueError("Open interest response missing conid")
-    return OpenInterestSnapshot(
-        conid=conid,
-        open_interest=_as_int(_first(payload, "open_interest", "openInterest")),
-        collected_at=collected_at,
-    )
+def parse_open_interest_response(
+    payload: Any,
+    collected_at: datetime,
+    requested_conid: int | None = None,
+) -> OpenInterestSnapshot:
+    if isinstance(payload, list):
+        if not payload:
+            raise ValueError("Open interest response is empty")
+        if len(payload) == 1:
+            return parse_open_interest_response(
+                payload[0],
+                collected_at=collected_at,
+                requested_conid=requested_conid,
+            )
+        if requested_conid is not None:
+            for item in payload:
+                if isinstance(item, dict):
+                    item_conid = _as_int(_first(item, "conid", "contract_id", "id"))
+                    if item_conid == requested_conid:
+                        return parse_open_interest_response(
+                            item,
+                            collected_at=collected_at,
+                            requested_conid=requested_conid,
+                        )
+        raise ValueError("Open interest response list has no matching contract id")
+
+    if isinstance(payload, dict):
+        conid = _as_int(_first(payload, "conid", "contract_id", "id"))
+        if conid is None:
+            conid = requested_conid
+
+        open_interest = _as_int(_first(payload, "open_interest", "openInterest"))
+        if open_interest is None and len(payload) == 1:
+            only_key, only_value = next(iter(payload.items()))
+            if str(only_key).isdigit():
+                conid = conid or int(str(only_key))
+                open_interest = _as_int(only_value)
+
+        if conid is None:
+            raise ValueError("Open interest response missing conid")
+
+        return OpenInterestSnapshot(
+            conid=conid,
+            open_interest=open_interest,
+            collected_at=collected_at,
+        )
+
+    if requested_conid is not None:
+        return OpenInterestSnapshot(
+            conid=requested_conid,
+            open_interest=_as_int(payload),
+            collected_at=collected_at,
+        )
+
+    raise ValueError("Unsupported open interest response shape")
 
 
 def parse_projected_probabilities_response(
