@@ -54,6 +54,10 @@ IBKR_BASE_URL=https://forecasttrader.interactivebrokers.ie
 IBKR_PUBLIC_PREFIX=/tws.proxy/public
 IBKR_EXCHANGE=FORECASTX
 HISTORY_PERIODS=1week,1month
+HTTP_REQUESTS_PER_SECOND=8
+CONTRACT_DETAILS_WORKERS=8
+HISTORY_WORKERS=8
+OPEN_INTEREST_BATCH_SIZE=100
 LOG_LEVEL=INFO
 ```
 
@@ -152,7 +156,11 @@ See `deploy/systemd/README.md` for installation steps.
 - `contract_history` preserves `period_requested`, so `1week` and `1month`
   responses can coexist for the same timestamp.
 - Open-interest batching uses repeated `id=` query params with a configurable
-  batch size (`OPEN_INTEREST_BATCH_SIZE`, default `50`).
+  batch size (`OPEN_INTEREST_BATCH_SIZE`, default `100`).
+- High-cardinality fetch stages use bounded parallelism:
+  `CONTRACT_DETAILS_WORKERS` and `HISTORY_WORKERS` both default to `8`.
+- Global request pacing defaults to `HTTP_REQUESTS_PER_SECOND=8`, which is much
+  faster than the original MVP while still keeping a global cap in place.
 - Raw responses remain append-only for replay and debugging.
 - PostgreSQL advisory locks prevent overlapping runs for the same job type when
   driven by host timers.

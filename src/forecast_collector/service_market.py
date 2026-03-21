@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from .http_client import ForecastTraderClient
 from .models import CollectionSummary
 from .parsers import parse_contract_details_response, parse_market_response
@@ -94,16 +96,40 @@ class MarketCollectorService:
         stubs_by_conid = {contract.conid: contract for contract in contracts}
         details_responses = []
         enriched_contracts = []
-        for conid, stub in stubs_by_conid.items():
-            details_response = self.client.get_contract_details(conid)
-            details_responses.append(details_response)
-            enriched = parse_contract_details_response(
-                details_response.response_json,
-                collected_at=details_response.fetched_at,
-                fallback_underlying_conid=market.underlying_conid,
-                requested_conid=conid,
-            )
-            enriched_contracts.append(stub.merge(enriched))
+        workers = min(
+            max(1, self.client.settings.contract_details_workers),
+            max(1, len(stubs_by_conid)),
+        )
+
+        if workers == 1:
+            for conid, stub in stubs_by_conid.items():
+                details_response = self.client.get_contract_details(conid)
+                details_responses.append(details_response)
+                enriched = parse_contract_details_response(
+                    details_response.response_json,
+                    collected_at=details_response.fetched_at,
+                    fallback_underlying_conid=market.underlying_conid,
+                    requested_conid=conid,
+                )
+                enriched_contracts.append(stub.merge(enriched))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_conid = {
+                    executor.submit(self.client.get_contract_details, conid): conid
+                    for conid in stubs_by_conid
+                }
+                for future in as_completed(future_to_conid):
+                    conid = future_to_conid[future]
+                    stub = stubs_by_conid[conid]
+                    details_response = future.result()
+                    details_responses.append(details_response)
+                    enriched = parse_contract_details_response(
+                        details_response.response_json,
+                        collected_at=details_response.fetched_at,
+                        fallback_underlying_conid=market.underlying_conid,
+                        requested_conid=conid,
+                    )
+                    enriched_contracts.append(stub.merge(enriched))
 
         with self.repository.transaction():
             self.repository.record_raw_response(run_id, market_response)

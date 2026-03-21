@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -26,6 +27,18 @@ class ForecastTraderClient:
         self._client = session or httpx.Client(
             base_url=settings.ibkr_base_url,
             timeout=settings.http_timeout_seconds,
+            limits=httpx.Limits(
+                max_connections=max(
+                    20,
+                    settings.contract_details_workers * 2,
+                    settings.history_workers * 2,
+                ),
+                max_keepalive_connections=max(
+                    10,
+                    settings.contract_details_workers,
+                    settings.history_workers,
+                ),
+            ),
             headers={
                 "Accept": "application/json",
                 "User-Agent": "forecasttrader-collector/0.1.0",
@@ -35,6 +48,7 @@ class ForecastTraderClient:
             1.0 / settings.http_requests_per_second if settings.http_requests_per_second > 0 else 0.0
         )
         self._last_request_started_at = 0.0
+        self._rate_limit_lock = threading.Lock()
         max_wait_seconds = max(
             settings.http_retry_backoff_seconds,
             settings.http_retry_backoff_seconds * max(settings.http_max_retries, 1),
@@ -83,11 +97,12 @@ class ForecastTraderClient:
     def _respect_rate_limit(self) -> None:
         if self._minimum_interval <= 0:
             return
-        elapsed = time.monotonic() - self._last_request_started_at
-        remaining = self._minimum_interval - elapsed
-        if remaining > 0:
-            time.sleep(remaining)
-        self._last_request_started_at = time.monotonic()
+        with self._rate_limit_lock:
+            elapsed = time.monotonic() - self._last_request_started_at
+            remaining = self._minimum_interval - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            self._last_request_started_at = time.monotonic()
 
     def _do_request(self, spec: RequestSpec) -> httpx.Response:
         last_not_found: httpx.HTTPStatusError | None = None

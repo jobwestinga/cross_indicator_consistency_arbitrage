@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from .config import Settings
 from .http_client import ForecastTraderClient
 from .models import CollectionSummary, HistoryCollectionMode
@@ -55,29 +57,52 @@ class HistoryCollectorService:
                         market_underlying_conid
                     )
                     summary.contracts_processed += len(contracts)
-                    for contract in contracts:
-                        conid = int(contract["conid"])
-                        for period in self.settings.history_periods:
-                            response = self.client.get_history(conid, period)
-                            points = parse_history_response(
-                                response.response_json,
-                                conid=conid,
-                                period_requested=period,
-                                collected_at=response.fetched_at,
+                    requests = [
+                        (int(contract["conid"]), period)
+                        for contract in contracts
+                        for period in self.settings.history_periods
+                    ]
+                    workers = min(
+                        max(1, self.settings.history_workers),
+                        max(1, len(requests)),
+                    )
+
+                    if workers == 1:
+                        responses = [
+                            (conid, period, self.client.get_history(conid, period))
+                            for conid, period in requests
+                        ]
+                    else:
+                        responses = []
+                        with ThreadPoolExecutor(max_workers=workers) as executor:
+                            future_to_request = {
+                                executor.submit(self.client.get_history, conid, period): (conid, period)
+                                for conid, period in requests
+                            }
+                            for future in as_completed(future_to_request):
+                                conid, period = future_to_request[future]
+                                responses.append((conid, period, future.result()))
+
+                    for conid, period, response in responses:
+                        points = parse_history_response(
+                            response.response_json,
+                            conid=conid,
+                            period_requested=period,
+                            collected_at=response.fetched_at,
+                        )
+                        no_data = bool(response.response_json.get("no_data")) and not points
+                        with self.repository.transaction():
+                            self.repository.record_raw_response(run_id, response)
+                            summary.history_points_inserted += self.repository.insert_history_points(
+                                points
                             )
-                            no_data = bool(response.response_json.get("no_data")) and not points
-                            with self.repository.transaction():
-                                self.repository.record_raw_response(run_id, response)
-                                summary.history_points_inserted += self.repository.insert_history_points(
-                                    points
-                                )
-                                self.repository.mark_contract_history_collected(
-                                    conid,
-                                    response.fetched_at,
-                                    no_data=no_data,
-                                )
-                            if no_data:
-                                summary.no_data_history_contracts += 1
+                            self.repository.mark_contract_history_collected(
+                                conid,
+                                response.fetched_at,
+                                no_data=no_data,
+                            )
+                        if no_data:
+                            summary.no_data_history_contracts += 1
                     summary.markets_processed += 1
                 except Exception as exc:
                     summary.errors.append(f"{market_underlying_conid}: {exc}")
