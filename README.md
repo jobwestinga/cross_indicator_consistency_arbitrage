@@ -22,16 +22,43 @@ pipeline is stable in production.
 python -m forecast_collector.cli migrate
 python -m forecast_collector.cli discover-markets
 python -m forecast_collector.cli collect-seed-market --underlying-conid 793085688
+python -m forecast_collector.cli collect-seed-market --underlying-conid 793085688 --contract-details-limit 6
 python -m forecast_collector.cli collect-market-structures --all-discovered
 python -m forecast_collector.cli collect-open-interest --all-discovered
 python -m forecast_collector.cli collect-probabilities --all-discovered
 python -m forecast_collector.cli collect-history --all-discovered --mode backfill
 python -m forecast_collector.cli collect-history --all-discovered --mode incremental
+python -m forecast_collector.cli collect-history --underlying-conid 793085688 --mode backfill --contract-limit 6 --history-periods 1week
 python -m forecast_collector.cli report-health
 ```
 
 The original single-market commands are preserved for debugging and regression
 checks.
+
+## Fast Smoke Tests
+
+For day-to-day validation, prefer a small smoke test instead of a full market
+run every time:
+
+```bash
+python -m forecast_collector.cli collect-seed-market \
+  --underlying-conid 793085688 \
+  --contract-details-limit 6
+
+python -m forecast_collector.cli collect-open-interest \
+  --underlying-conid 793085688
+
+python -m forecast_collector.cli collect-probabilities \
+  --underlying-conid 793085688
+
+python -m forecast_collector.cli collect-history \
+  --underlying-conid 793085688 \
+  --mode backfill \
+  --contract-limit 6 \
+  --history-periods 1week
+```
+
+Run the full unbounded commands only once you are ready for the final canary.
 
 ## Current Validation Markets
 
@@ -60,6 +87,9 @@ HISTORY_WORKERS=8
 OPEN_INTEREST_BATCH_SIZE=100
 LOG_LEVEL=INFO
 ```
+
+If you already have an older `.env`, remove any legacy throttle such as
+`HTTP_REQUESTS_PER_SECOND=1`. Environment values override the faster defaults.
 
 `HISTORY_PERIODS` accepts either comma-delimited text or JSON array form:
 
@@ -161,6 +191,12 @@ See `deploy/systemd/README.md` for installation steps.
   `CONTRACT_DETAILS_WORKERS` and `HISTORY_WORKERS` both default to `8`.
 - Global request pacing defaults to `HTTP_REQUESTS_PER_SECOND=8`, which is much
   faster than the original MVP while still keeping a global cap in place.
+- `collect-seed-market --contract-details-limit N` and
+  `collect-history --contract-limit N --history-periods ...` are intended for
+  fast smoke tests before a full canary.
+- History collection now records partial failures and continues when a subset
+  of contract-period requests exhaust retries, instead of aborting the whole
+  run on the first upstream `500`.
 - Raw responses remain append-only for replay and debugging.
 - PostgreSQL advisory locks prevent overlapping runs for the same job type when
   driven by host timers.

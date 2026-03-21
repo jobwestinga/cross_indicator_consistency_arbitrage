@@ -30,6 +30,16 @@ def _resolve_underlying_conid(settings: Settings, supplied: int | None) -> int:
     return underlying_conid
 
 
+def _resolve_history_periods(settings: Settings, override: str | None) -> list[str]:
+    if override is None:
+        return settings.history_periods
+
+    periods = [item.strip() for item in override.split(",") if item.strip()]
+    if not periods:
+        raise typer.BadParameter("Provide at least one history period.")
+    return periods
+
+
 def _print_summary(summary: Any) -> None:
     payload = summary.model_dump() if hasattr(summary, "model_dump") else summary
     typer.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
@@ -59,6 +69,12 @@ def discover_markets() -> None:
 @app.command("collect-seed-market")
 def collect_seed_market(
     underlying_conid: int | None = typer.Option(None, "--underlying-conid"),
+    contract_details_limit: int | None = typer.Option(
+        None,
+        "--contract-details-limit",
+        min=1,
+        help="Only enrich the first N contracts with detail calls. Useful for smoke tests.",
+    ),
 ) -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
@@ -67,7 +83,10 @@ def collect_seed_market(
         settings
     ) as client:
         service = MarketCollectorService(client, repository)
-        summary = service.collect_seed_market(resolved_underlying_conid)
+        summary = service.collect_seed_market(
+            resolved_underlying_conid,
+            contract_details_limit=contract_details_limit,
+        )
     _print_summary(summary)
 
 
@@ -113,6 +132,17 @@ def collect_history(
         "--mode",
         case_sensitive=False,
     ),
+    contract_limit: int | None = typer.Option(
+        None,
+        "--contract-limit",
+        min=1,
+        help="Only collect history for the first N contracts. Useful for smoke tests.",
+    ),
+    history_periods: str | None = typer.Option(
+        None,
+        "--history-periods",
+        help="Comma-delimited override for this run, for example 1week or 1week,1month.",
+    ),
 ) -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
@@ -127,6 +157,8 @@ def collect_history(
             resolved_underlying_conid,
             all_discovered=all_discovered,
             mode=mode,
+            contract_limit=contract_limit,
+            history_periods=_resolve_history_periods(settings, history_periods),
         )
     _print_summary(summary)
 

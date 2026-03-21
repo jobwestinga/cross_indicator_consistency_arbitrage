@@ -7,6 +7,7 @@ from .http_client import ForecastTraderClient
 from .models import CollectionSummary, HistoryCollectionMode
 from .parsers import parse_history_response
 from .repository import CollectorRepository
+from .service_helpers import limit_items
 
 
 class HistoryCollectorService:
@@ -26,6 +27,8 @@ class HistoryCollectorService:
         *,
         all_discovered: bool = False,
         mode: HistoryCollectionMode = HistoryCollectionMode.BACKFILL,
+        contract_limit: int | None = None,
+        history_periods: list[str] | None = None,
     ) -> CollectionSummary:
         lock_name = "collect-history"
         if not self.repository.acquire_advisory_lock(lock_name):
@@ -36,11 +39,13 @@ class HistoryCollectorService:
 
         run_id = 0
         try:
+            periods = history_periods or self.settings.history_periods
             job_args = {
                 "underlying_conid": underlying_conid,
                 "all_discovered": all_discovered,
                 "mode": mode.value,
-                "history_periods": self.settings.history_periods,
+                "contract_limit": contract_limit,
+                "history_periods": periods,
             }
             run_id = self.repository.start_run("collect-history", job_args)
             summary = CollectionSummary(run_id=run_id)
@@ -53,25 +58,31 @@ class HistoryCollectorService:
 
             for market_underlying_conid in target_underlyings:
                 try:
-                    contracts = self.repository.list_contracts_for_underlying(
-                        market_underlying_conid
+                    contracts = limit_items(
+                        self.repository.list_contracts_for_underlying(market_underlying_conid),
+                        contract_limit,
                     )
                     summary.contracts_processed += len(contracts)
                     requests = [
                         (int(contract["conid"]), period)
                         for contract in contracts
-                        for period in self.settings.history_periods
+                        for period in periods
                     ]
                     workers = min(
                         max(1, self.settings.history_workers),
                         max(1, len(requests)),
                     )
+                    request_errors: list[str] = []
 
                     if workers == 1:
-                        responses = [
-                            (conid, period, self.client.get_history(conid, period))
-                            for conid, period in requests
-                        ]
+                        responses = []
+                        for conid, period in requests:
+                            try:
+                                responses.append(
+                                    (conid, period, self.client.get_history(conid, period))
+                                )
+                            except Exception as exc:
+                                request_errors.append(f"history[{conid}][{period}]: {exc}")
                     else:
                         responses = []
                         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -81,7 +92,16 @@ class HistoryCollectorService:
                             }
                             for future in as_completed(future_to_request):
                                 conid, period = future_to_request[future]
-                                responses.append((conid, period, future.result()))
+                                try:
+                                    responses.append((conid, period, future.result()))
+                                except Exception as exc:
+                                    request_errors.append(f"history[{conid}][{period}]: {exc}")
+
+                    if requests and not responses:
+                        raise RuntimeError(
+                            "All history requests failed "
+                            f"for {len(requests)} contract-period fetches"
+                        )
 
                     for conid, period, response in responses:
                         points = parse_history_response(
@@ -104,6 +124,9 @@ class HistoryCollectorService:
                         if no_data:
                             summary.no_data_history_contracts += 1
                     summary.markets_processed += 1
+                    summary.errors.extend(
+                        f"{market_underlying_conid}: {error}" for error in request_errors
+                    )
                 except Exception as exc:
                     summary.errors.append(f"{market_underlying_conid}: {exc}")
                     if not all_discovered:
