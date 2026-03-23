@@ -37,4 +37,5 @@ def test_scheduler_renders_systemd_units() -> None:
 
     assert "WorkingDirectory=/srv/cross_indicator_consistency_arbitrage" in service
     assert "ExecStart=docker compose run --rm collector discover-markets" in service
+    assert "OnActiveSec=60" in timer
     assert "OnUnitActiveSec=3600" in timer

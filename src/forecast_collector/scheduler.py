@@ -122,6 +122,7 @@ def render_timer(definition: ScheduleDefinition) -> str:
             f"Description=Timer for {definition.description or definition.name}",
             "",
             "[Timer]",
+            "OnActiveSec=60",
             f"OnUnitActiveSec={definition.interval_seconds}",
             "Persistent=true",
             "",

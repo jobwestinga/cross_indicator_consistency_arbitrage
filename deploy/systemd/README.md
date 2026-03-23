@@ -52,3 +52,7 @@ The generated timers are designed to work together:
 
 That gives you a running process on the VPS even though each individual
 collector invocation is a short one-shot Docker command.
+
+The timer template also includes an initial `OnActiveSec=60`, so a freshly
+enabled timer will start its first run about one minute after installation and
+then continue on its normal cadence.
