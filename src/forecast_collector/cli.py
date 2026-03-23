@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, date, datetime, time
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -11,6 +13,7 @@ from .logging import configure_logging
 from .models import HistoryCollectionMode
 from .repository import CollectorRepository
 from .service_discovery import MarketDiscoveryService
+from .service_export import DatasetExportService
 from .service_health import HealthReporterService
 from .service_history import HistoryCollectorService
 from .service_interest import OpenInterestCollectorService
@@ -43,6 +46,29 @@ def _resolve_history_periods(settings: Settings, override: str | None) -> list[s
 def _print_summary(summary: Any) -> None:
     payload = summary.model_dump() if hasattr(summary, "model_dump") else summary
     typer.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+def _resolve_since(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+
+    raw = value.strip()
+    if not raw:
+        raise typer.BadParameter("Provide a non-empty --since value.")
+
+    try:
+        if "T" in raw or " " in raw:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            parsed = datetime.combine(date.fromisoformat(raw), time.min)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "Use ISO format for --since, for example 2026-03-01 or 2026-03-01T12:00:00Z."
+        ) from exc
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @app.command("migrate")
@@ -219,6 +245,42 @@ def report_health() -> None:
     with CollectorRepository(settings.database_url) as repository:
         service = HealthReporterService(repository)
         summary = service.report()
+    _print_summary(summary)
+
+
+@app.command("export-analysis-dataset")
+def export_analysis_dataset(
+    output_dir: Path = typer.Option(
+        Path("exports"),
+        "--output-dir",
+        help="Directory where the dataset bundle will be written.",
+    ),
+    dataset_name: str | None = typer.Option(
+        None,
+        "--dataset-name",
+        help="Optional output filename. '.zip' is added automatically when omitted.",
+    ),
+    underlying_conid: int | None = typer.Option(
+        None,
+        "--underlying-conid",
+        help="Optional single-market export filter.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Optional ISO timestamp/date filter for time-series tables, for example 2026-03-01.",
+    ),
+) -> None:
+    settings = load_settings()
+    configure_logging(settings.log_level)
+    with CollectorRepository(settings.database_url) as repository:
+        service = DatasetExportService(repository)
+        summary = service.export(
+            output_dir,
+            dataset_name=dataset_name,
+            underlying_conid=underlying_conid,
+            since=_resolve_since(since),
+        )
     _print_summary(summary)
 
 

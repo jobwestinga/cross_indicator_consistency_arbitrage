@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from forecast_collector.models import ApiResponseEnvelope, HistoryCollectionMode
+from forecast_collector.service_export import DatasetExportService
 from forecast_collector.service_history import HistoryCollectorService
 from forecast_collector.service_market import MarketCollectorService
 
@@ -205,6 +207,34 @@ class FakeMarketClient:
         )
 
 
+class FakeExportRepository:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+        self.payloads = {
+            "market_categories": "category_key,category_name\ncrypto,Crypto\n",
+            "markets": "underlying_conid,market_name\n793085688,BTC Price\n",
+            "contracts": "underlying_conid,conid\n793085688,101\n",
+            "projected_probabilities": "underlying_conid,collected_at\n793085688,2026-03-21T00:00:00Z\n",
+            "open_interest_snapshots": "underlying_conid,collected_at\n793085688,2026-03-21T00:00:00Z\n",
+            "contract_history": "underlying_conid,ts_utc\n793085688,2026-03-21T00:00:00Z\n",
+        }
+
+    def write_query_csv(
+        self,
+        cursor_label: str,
+        query: str,
+        output,
+        params: tuple | None = None,
+        *,
+        fetch_size: int = 10_000,
+    ) -> int:
+        del query, fetch_size
+        self.calls.append((cursor_label, tuple(params or ())))
+        payload = self.payloads[cursor_label]
+        output.write(payload)
+        return max(0, len(payload.strip().splitlines()) - 1)
+
+
 def test_history_collection_continues_when_one_request_fails() -> None:
     settings = SimpleNamespace(
         history_workers=4,
@@ -301,3 +331,45 @@ def test_market_collection_can_limit_detail_enrichment_for_smoke_tests() -> None
     assert len(repository.upsert_batches[1]) == 1
     assert repository.finished is not None
     assert repository.finished[1] == "success"
+
+
+def test_dataset_export_creates_shareable_zip_bundle(tmp_path: Path) -> None:
+    repository = FakeExportRepository()
+    since = datetime(2026, 3, 1, tzinfo=UTC)
+
+    summary = DatasetExportService(repository).export(
+        tmp_path,
+        dataset_name="analysis_snapshot",
+        underlying_conid=793085688,
+        since=since,
+    )
+
+    bundle_path = tmp_path / "analysis_snapshot.zip"
+
+    assert bundle_path.exists()
+    assert summary.bundle_path == str(bundle_path)
+    assert [item.name for item in summary.files] == [
+        "market_categories.csv",
+        "markets.csv",
+        "contracts.csv",
+        "projected_probabilities.csv",
+        "open_interest_snapshots.csv",
+        "contract_history.csv",
+    ]
+
+    with zipfile.ZipFile(bundle_path) as archive:
+        assert set(archive.namelist()) == {
+            "market_categories.csv",
+            "markets.csv",
+            "contracts.csv",
+            "projected_probabilities.csv",
+            "open_interest_snapshots.csv",
+            "contract_history.csv",
+            "manifest.json",
+        }
+        manifest = json.loads(archive.read("manifest.json"))
+
+    assert manifest["underlying_conid"] == 793085688
+    assert manifest["since"] == since.isoformat()
+    assert repository.calls[0][0] == "market_categories"
+    assert repository.calls[-1][0] == "contract_history"

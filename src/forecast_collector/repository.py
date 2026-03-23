@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import csv
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from io import TextIOBase
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -50,6 +53,35 @@ class CollectorRepository:
     def transaction(self) -> Iterator[None]:
         with self.conn.transaction():
             yield
+
+    def write_query_csv(
+        self,
+        cursor_label: str,
+        query: str,
+        output: TextIOBase,
+        params: Sequence[Any] | None = None,
+        *,
+        fetch_size: int = 10_000,
+    ) -> int:
+        row_count = 0
+        with self.conn.transaction():
+            with self.conn.cursor(
+                name=f"export_{cursor_label}_{uuid.uuid4().hex[:8]}",
+                row_factory=dict_row,
+            ) as cur:
+                cur.execute(query, tuple(params or ()))
+                fieldnames = [column.name for column in (cur.description or ())]
+                writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                while True:
+                    rows = cur.fetchmany(fetch_size)
+                    if not rows:
+                        break
+                    for row in rows:
+                        writer.writerow(dict(row))
+                        row_count += 1
+        output.flush()
+        return row_count
 
     def run_migrations(self, sql_directory: Path) -> None:
         self.conn.execute(

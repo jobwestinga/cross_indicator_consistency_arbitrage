@@ -33,6 +33,7 @@ python -m forecast_collector.cli collect-open-interest --all-discovered
 python -m forecast_collector.cli collect-probabilities --all-discovered
 python -m forecast_collector.cli collect-history --all-discovered --mode incremental --request-limit 500
 python -m forecast_collector.cli collect-history --all-discovered --mode backfill --request-limit 1000
+python -m forecast_collector.cli export-analysis-dataset --output-dir exports
 python -m forecast_collector.cli collect-history --underlying-conid 793085688 --mode backfill --contract-limit 6 --history-periods 1week
 python -m forecast_collector.cli report-health
 ```
@@ -148,6 +149,44 @@ That means you do not need to wait for a perfect one-shot historical backfill
 before going live. The database can start useful and then improve over time as
 the scheduled jobs keep running.
 
+## Dataset Export
+
+For sharing with a teammate who does not have server access, generate a zipped
+CSV bundle from the VPS:
+
+```bash
+python -m forecast_collector.cli export-analysis-dataset --output-dir exports
+```
+
+That writes a file such as `exports/forecast_analysis_dataset_20260323T120000Z.zip`
+containing:
+
+- `market_categories.csv`
+- `markets.csv`
+- `contracts.csv`
+- `projected_probabilities.csv`
+- `open_interest_snapshots.csv`
+- `contract_history.csv`
+- `manifest.json`
+
+The time-series files are denormalized with market and contract identifiers so
+your teammate can load them directly into pandas/R without doing database joins.
+
+Useful filters:
+
+```bash
+python -m forecast_collector.cli export-analysis-dataset \
+  --output-dir exports \
+  --underlying-conid 793085688 \
+  --since 2026-03-01
+```
+
+To copy a bundle off the VPS:
+
+```bash
+scp job090305@your-server:~/cross_indicator_consistency_arbitrage/exports/forecast_analysis_dataset_*.zip .
+```
+
 ## Docker Compose
 
 The repository includes:
@@ -169,6 +208,7 @@ docker compose run --rm collector collect-open-interest --all-discovered
 docker compose run --rm collector collect-probabilities --all-discovered
 docker compose run --rm collector collect-history --all-discovered --mode incremental --request-limit 500
 docker compose run --rm collector collect-history --all-discovered --mode backfill --request-limit 1000
+docker compose run --rm collector export-analysis-dataset --output-dir exports
 ```
 
 Run a specific test module:

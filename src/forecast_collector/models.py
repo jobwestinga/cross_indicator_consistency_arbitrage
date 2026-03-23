@@ -158,3 +158,17 @@ class HealthReport(BaseModel):
     empty_probability_markets_last_24h: list[int] = Field(default_factory=list)
     history_no_data_contracts_last_24h: list[int] = Field(default_factory=list)
     raw_api_responses_disk_bytes: int | None = None
+
+
+class DatasetExportFile(BaseModel):
+    name: str
+    rows: int
+
+
+class DatasetExportSummary(BaseModel):
+    bundle_path: str
+    generated_at: datetime
+    underlying_conid: int | None = None
+    since: datetime | None = None
+    files: list[DatasetExportFile] = Field(default_factory=list)
+    message: str | None = None
