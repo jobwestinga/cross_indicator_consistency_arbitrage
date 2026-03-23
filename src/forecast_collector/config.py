@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     http_retry_backoff_seconds: float = Field(default=1.0, alias="HTTP_RETRY_BACKOFF_SECONDS")
     http_requests_per_second: float = Field(default=8.0, alias="HTTP_REQUESTS_PER_SECOND")
     history_periods_raw: str = Field(default="1week,1month", alias="HISTORY_PERIODS")
+    history_incremental_request_limit: int = Field(
+        default=500,
+        alias="HISTORY_INCREMENTAL_REQUEST_LIMIT",
+    )
+    history_backfill_request_limit: int = Field(
+        default=1000,
+        alias="HISTORY_BACKFILL_REQUEST_LIMIT",
+    )
+    history_no_data_retry_hours: int = Field(
+        default=24,
+        alias="HISTORY_NO_DATA_RETRY_HOURS",
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     tz: str = Field(default="UTC", alias="TZ")
     sql_directory: Path = Field(default=Path("sql"))

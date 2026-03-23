@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from forecast_collector.models import ApiResponseEnvelope
+from forecast_collector.models import ApiResponseEnvelope, HistoryCollectionMode
 from forecast_collector.service_history import HistoryCollectorService
 from forecast_collector.service_market import MarketCollectorService
 
@@ -22,9 +22,11 @@ class FakeHistoryRepository:
     def __init__(self) -> None:
         self.finished: tuple[int, str, str | None, dict | None] | None = None
         self.job_args: dict | None = None
-        self.marked_history: list[tuple[int, bool]] = []
+        self.marked_history: list[tuple[int, bool, str | None]] = []
         self.recorded_responses: list[ApiResponseEnvelope] = []
         self.inserted_points = 0
+        self.incremental_calls: list[tuple[list[str], int, int | None]] = []
+        self.backfill_calls: list[tuple[list[str], int, int | None]] = []
 
     def acquire_advisory_lock(self, lock_name: str) -> bool:
         return True
@@ -51,7 +53,42 @@ class FakeHistoryRepository:
         *,
         active_only: bool = True,
     ) -> list[dict]:
-        return [{"conid": 101}, {"conid": 202}]
+        return [
+            {"conid": 101, "underlying_conid": underlying_conid},
+            {"conid": 202, "underlying_conid": underlying_conid},
+        ]
+
+    def list_history_requests_for_incremental(
+        self,
+        periods: list[str],
+        *,
+        limit: int,
+        underlying_conid: int | None = None,
+    ) -> list[dict]:
+        self.incremental_calls.append((list(periods), limit, underlying_conid))
+        return [
+            {
+                "conid": 101,
+                "underlying_conid": 793085688,
+                "period_requested": "1week",
+            },
+            {
+                "conid": 202,
+                "underlying_conid": 793085688,
+                "period_requested": "1month",
+            },
+        ]
+
+    def list_history_requests_for_backfill(
+        self,
+        periods: list[str],
+        *,
+        limit: int,
+        no_data_retry_before: datetime,
+        underlying_conid: int | None = None,
+    ) -> list[dict]:
+        self.backfill_calls.append((list(periods), limit, underlying_conid))
+        return []
 
     @contextmanager
     def transaction(self):
@@ -70,8 +107,9 @@ class FakeHistoryRepository:
         collected_at: datetime,
         *,
         no_data: bool = False,
+        period_requested: str | None = None,
     ) -> None:
-        self.marked_history.append((conid, no_data))
+        self.marked_history.append((conid, no_data, period_requested))
 
 
 class FakeHistoryClient:
@@ -168,7 +206,10 @@ class FakeMarketClient:
 
 
 def test_history_collection_continues_when_one_request_fails() -> None:
-    settings = SimpleNamespace(history_workers=4, history_periods=["1week", "1month"])
+    settings = SimpleNamespace(
+        history_workers=4,
+        history_periods=["1week", "1month"],
+    )
     client = FakeHistoryClient()
     repository = FakeHistoryRepository()
 
@@ -183,7 +224,10 @@ def test_history_collection_continues_when_one_request_fails() -> None:
 
 
 def test_history_collection_honors_smoke_test_limits() -> None:
-    settings = SimpleNamespace(history_workers=4, history_periods=["1week", "1month"])
+    settings = SimpleNamespace(
+        history_workers=4,
+        history_periods=["1week", "1month"],
+    )
     client = FakeHistoryClient()
     repository = FakeHistoryRepository()
 
@@ -202,6 +246,41 @@ def test_history_collection_honors_smoke_test_limits() -> None:
         "mode": "backfill",
         "contract_limit": 1,
         "history_periods": ["1week"],
+        "request_limit": None,
+    }
+
+
+def test_history_collection_uses_bounded_incremental_requests_for_all_markets() -> None:
+    settings = SimpleNamespace(
+        history_workers=1,
+        history_periods=["1week", "1month"],
+        history_incremental_request_limit=25,
+        history_backfill_request_limit=50,
+        history_no_data_retry_hours=24,
+    )
+    client = FakeHistoryClient()
+    repository = FakeHistoryRepository()
+
+    summary = HistoryCollectorService(settings, client, repository).collect(
+        all_discovered=True,
+        mode=HistoryCollectionMode.INCREMENTAL,
+        history_periods=["1week", "1month"],
+    )
+
+    assert summary.contracts_processed == 2
+    assert summary.markets_processed == 1
+    assert summary.history_points_inserted == 1
+    assert len(summary.errors) == 1
+    assert repository.incremental_calls == [(["1week", "1month"], 25, None)]
+    assert repository.backfill_calls == []
+    assert client.calls == [(101, "1week"), (202, "1month")]
+    assert repository.job_args == {
+        "underlying_conid": None,
+        "all_discovered": True,
+        "mode": "incremental",
+        "contract_limit": None,
+        "history_periods": ["1week", "1month"],
+        "request_limit": None,
     }
 
 

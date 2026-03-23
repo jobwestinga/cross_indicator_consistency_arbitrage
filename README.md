@@ -16,6 +16,11 @@ supports:
 Realtime/websocket ingestion is intentionally out of scope until the HTTP
 pipeline is stable in production.
 
+In plain language: the collector now has two jobs for history. One job keeps
+recent history fresh in small frequent batches. Another job slowly fills missing
+history windows and retries sparse gaps over time. Together, those jobs keep
+the database up to date without requiring giant all-market sweeps every time.
+
 ## Implemented Commands
 
 ```bash
@@ -26,8 +31,8 @@ python -m forecast_collector.cli collect-seed-market --underlying-conid 79308568
 python -m forecast_collector.cli collect-market-structures --all-discovered
 python -m forecast_collector.cli collect-open-interest --all-discovered
 python -m forecast_collector.cli collect-probabilities --all-discovered
-python -m forecast_collector.cli collect-history --all-discovered --mode backfill
-python -m forecast_collector.cli collect-history --all-discovered --mode incremental
+python -m forecast_collector.cli collect-history --all-discovered --mode incremental --request-limit 500
+python -m forecast_collector.cli collect-history --all-discovered --mode backfill --request-limit 1000
 python -m forecast_collector.cli collect-history --underlying-conid 793085688 --mode backfill --contract-limit 6 --history-periods 1week
 python -m forecast_collector.cli report-health
 ```
@@ -86,6 +91,9 @@ CONTRACT_DETAILS_WORKERS=8
 HISTORY_WORKERS=8
 OPEN_INTEREST_BATCH_SIZE=100
 LOG_LEVEL=INFO
+HISTORY_INCREMENTAL_REQUEST_LIMIT=500
+HISTORY_BACKFILL_REQUEST_LIMIT=1000
+HISTORY_NO_DATA_RETRY_HOURS=24
 ```
 
 If you already have an older `.env`, remove any legacy throttle such as
@@ -121,8 +129,24 @@ python -m forecast_collector.cli collect-market-structures --all-discovered
 ```bash
 python -m forecast_collector.cli collect-open-interest --all-discovered
 python -m forecast_collector.cli collect-probabilities --all-discovered
-python -m forecast_collector.cli collect-history --all-discovered --mode incremental
+python -m forecast_collector.cli collect-history --all-discovered --mode incremental --request-limit 500
+python -m forecast_collector.cli collect-history --all-discovered --mode backfill --request-limit 1000
 ```
+
+## Automatic Upkeep
+
+Normal live operation should look like this:
+
+- `discover-markets` finds newly listed markets.
+- `collect-market-structures` pulls any new or changed contract ladders.
+- `collect-open-interest` keeps current snapshots fresh.
+- `collect-probabilities` keeps current projected probabilities fresh.
+- `collect-history --mode incremental` refreshes recent history in bounded batches.
+- `collect-history --mode backfill` slowly fills missing history holes in bounded batches.
+
+That means you do not need to wait for a perfect one-shot historical backfill
+before going live. The database can start useful and then improve over time as
+the scheduled jobs keep running.
 
 ## Docker Compose
 
@@ -143,7 +167,8 @@ docker compose run --rm collector discover-markets
 docker compose run --rm collector collect-market-structures --all-discovered
 docker compose run --rm collector collect-open-interest --all-discovered
 docker compose run --rm collector collect-probabilities --all-discovered
-docker compose run --rm collector collect-history --all-discovered --mode incremental
+docker compose run --rm collector collect-history --all-discovered --mode incremental --request-limit 500
+docker compose run --rm collector collect-history --all-discovered --mode backfill --request-limit 1000
 ```
 
 Run a specific test module:
@@ -191,12 +216,22 @@ See `deploy/systemd/README.md` for installation steps.
   `CONTRACT_DETAILS_WORKERS` and `HISTORY_WORKERS` both default to `8`.
 - Global request pacing defaults to `HTTP_REQUESTS_PER_SECOND=8`, which is much
   faster than the original MVP while still keeping a global cap in place.
+- Scheduled history collection is intentionally bounded. Use
+  `HISTORY_INCREMENTAL_REQUEST_LIMIT` to control how many contract-period
+  refreshes each incremental run performs, and
+  `HISTORY_BACKFILL_REQUEST_LIMIT` to control how aggressively missing history
+  holes are filled.
+- `HISTORY_NO_DATA_RETRY_HOURS` controls how long the backfill job waits before
+  retrying a contract-period that last came back as `no_data`.
 - `collect-seed-market --contract-details-limit N` and
   `collect-history --contract-limit N --history-periods ...` are intended for
   fast smoke tests before a full canary.
 - History collection now records partial failures and continues when a subset
   of contract-period requests exhaust retries, instead of aborting the whole
   run on the first upstream `500`.
+- History collection now tracks state per `(conid, period_requested)`, so the
+  scheduler can refresh recent windows and fill specific missing holes instead
+  of re-sweeping the full history set every time.
 - Raw responses remain append-only for replay and debugging.
 - PostgreSQL advisory locks prevent overlapping runs for the same job type when
   driven by host timers.

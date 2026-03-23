@@ -4,7 +4,8 @@ from forecast_collector.scheduler import build_schedule, render_service, render_
 
 
 def test_scheduler_builds_all_expected_jobs() -> None:
-    names = [definition.name for definition in build_schedule()]
+    schedule = build_schedule()
+    names = [definition.name for definition in schedule]
 
     assert names == [
         "forecast-discover",
@@ -14,6 +15,18 @@ def test_scheduler_builds_all_expected_jobs() -> None:
         "forecast-history-incremental",
         "forecast-history-backfill",
     ]
+
+    history_incremental = next(
+        definition for definition in schedule if definition.name == "forecast-history-incremental"
+    )
+    history_backfill = next(
+        definition for definition in schedule if definition.name == "forecast-history-backfill"
+    )
+
+    assert history_incremental.interval_seconds == 15 * 60
+    assert history_incremental.command[-2:] == ["--request-limit", "500"]
+    assert history_backfill.interval_seconds == 60 * 60
+    assert history_backfill.command[-2:] == ["--request-limit", "1000"]
 
 
 def test_scheduler_renders_systemd_units() -> None:

@@ -441,6 +441,94 @@ class CollectorRepository:
         ).fetchall()
         return list(rows)
 
+    def list_history_requests_for_incremental(
+        self,
+        periods: Sequence[str],
+        *,
+        limit: int,
+        underlying_conid: int | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            WITH desired_requests AS (
+                SELECT
+                    contracts.conid,
+                    contracts.underlying_conid,
+                    period_requested
+                FROM contracts
+                CROSS JOIN unnest(%s::text[]) AS periods(period_requested)
+                WHERE COALESCE(contracts.active, TRUE) = TRUE
+                  AND (%s::bigint IS NULL OR contracts.underlying_conid = %s::bigint)
+            )
+            SELECT
+                desired_requests.conid,
+                desired_requests.underlying_conid,
+                desired_requests.period_requested,
+                state.last_collected_at,
+                state.last_no_data_at
+            FROM desired_requests
+            LEFT JOIN contract_history_collection_state AS state
+              ON state.conid = desired_requests.conid
+             AND state.period_requested = desired_requests.period_requested
+            ORDER BY
+                CASE WHEN state.last_collected_at IS NULL THEN 0 ELSE 1 END,
+                COALESCE(state.last_collected_at, TIMESTAMPTZ 'epoch'),
+                desired_requests.underlying_conid,
+                desired_requests.conid,
+                desired_requests.period_requested
+            LIMIT %s
+            """,
+            (list(periods), underlying_conid, underlying_conid, limit),
+        ).fetchall()
+        return list(rows)
+
+    def list_history_requests_for_backfill(
+        self,
+        periods: Sequence[str],
+        *,
+        limit: int,
+        no_data_retry_before: datetime,
+        underlying_conid: int | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            WITH desired_requests AS (
+                SELECT
+                    contracts.conid,
+                    contracts.underlying_conid,
+                    period_requested
+                FROM contracts
+                CROSS JOIN unnest(%s::text[]) AS periods(period_requested)
+                WHERE COALESCE(contracts.active, TRUE) = TRUE
+                  AND (%s::bigint IS NULL OR contracts.underlying_conid = %s::bigint)
+            )
+            SELECT
+                desired_requests.conid,
+                desired_requests.underlying_conid,
+                desired_requests.period_requested,
+                state.last_collected_at,
+                state.last_no_data_at
+            FROM desired_requests
+            LEFT JOIN contract_history_collection_state AS state
+              ON state.conid = desired_requests.conid
+             AND state.period_requested = desired_requests.period_requested
+            WHERE state.last_collected_at IS NULL
+               OR (
+                    state.last_no_data_at IS NOT NULL
+                AND state.last_no_data_at <= %s
+               )
+            ORDER BY
+                CASE WHEN state.last_collected_at IS NULL THEN 0 ELSE 1 END,
+                COALESCE(state.last_no_data_at, TIMESTAMPTZ 'epoch'),
+                desired_requests.underlying_conid,
+                desired_requests.conid,
+                desired_requests.period_requested
+            LIMIT %s
+            """,
+            (list(periods), underlying_conid, underlying_conid, no_data_retry_before, limit),
+        ).fetchall()
+        return list(rows)
+
     def insert_history_points(self, points: Sequence[HistoryPoint]) -> int:
         if not points:
             return 0
@@ -488,16 +576,36 @@ class CollectorRepository:
         collected_at: datetime,
         *,
         no_data: bool = False,
+        period_requested: str | None = None,
     ) -> None:
         self.conn.execute(
             """
             UPDATE contracts
             SET last_history_collected_at = %s,
-                last_history_no_data_at = CASE WHEN %s THEN %s ELSE last_history_no_data_at END
+                last_history_no_data_at = CASE WHEN %s THEN %s ELSE NULL END
             WHERE conid = %s
             """,
             (collected_at, no_data, collected_at, conid),
         )
+        if period_requested is not None:
+            self.conn.execute(
+                """
+                INSERT INTO contract_history_collection_state (
+                    conid,
+                    period_requested,
+                    last_collected_at,
+                    last_no_data_at
+                )
+                VALUES (%s, %s, %s, CASE WHEN %s THEN %s ELSE NULL END)
+                ON CONFLICT (conid, period_requested) DO UPDATE SET
+                    last_collected_at = EXCLUDED.last_collected_at,
+                    last_no_data_at = CASE
+                        WHEN EXCLUDED.last_no_data_at IS NOT NULL THEN EXCLUDED.last_no_data_at
+                        ELSE NULL
+                    END
+                """,
+                (conid, period_requested, collected_at, no_data, collected_at),
+            )
 
     def insert_open_interest_snapshot(self, snapshot: OpenInterestSnapshot) -> None:
         self.insert_open_interest_snapshots([snapshot])

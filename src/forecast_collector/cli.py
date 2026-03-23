@@ -143,6 +143,12 @@ def collect_history(
         "--history-periods",
         help="Comma-delimited override for this run, for example 1week or 1week,1month.",
     ),
+    request_limit: int | None = typer.Option(
+        None,
+        "--request-limit",
+        min=1,
+        help="Cap the number of contract-period history requests. Mainly useful with --all-discovered.",
+    ),
 ) -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
@@ -159,6 +165,7 @@ def collect_history(
             mode=mode,
             contract_limit=contract_limit,
             history_periods=_resolve_history_periods(settings, history_periods),
+            request_limit=request_limit,
         )
     _print_summary(summary)
 

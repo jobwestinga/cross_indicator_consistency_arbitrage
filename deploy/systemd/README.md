@@ -3,6 +3,10 @@
 The collector is designed to run as a set of host-level `systemd` timers on the
 VPS instead of an in-app scheduler loop.
 
+In simple terms: the VPS runs short collector jobs every few minutes. Some jobs
+keep the latest data fresh. Another history job slowly fills gaps. This is the
+intended always-on mode.
+
 Generate unit files from the repo root:
 
 ```bash
@@ -36,3 +40,15 @@ sudo systemctl enable --now forecast-history-backfill.timer
 Each unit runs `docker compose run --rm collector ...` from the configured
 working directory, and the collector itself uses PostgreSQL advisory locks to
 prevent overlapping runs of the same job type.
+
+The generated timers are designed to work together:
+
+- `forecast-discover`: find newly listed markets every hour
+- `forecast-structure`: refresh contract ladders every 6 hours
+- `forecast-open-interest`: refresh current open-interest snapshots every 15 minutes
+- `forecast-probabilities`: refresh current projected probabilities every 30 minutes
+- `forecast-history-incremental`: refresh recent history in bounded batches every 15 minutes
+- `forecast-history-backfill`: fill missing history holes in bounded batches every hour
+
+That gives you a running process on the VPS even though each individual
+collector invocation is a short one-shot Docker command.

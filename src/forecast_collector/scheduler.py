@@ -45,7 +45,7 @@ def build_schedule() -> list[ScheduleDefinition]:
         ),
         ScheduleDefinition(
             name="forecast-probabilities",
-            interval_seconds=6 * 60 * 60,
+            interval_seconds=30 * 60,
             command=[
                 "docker",
                 "compose",
@@ -59,7 +59,7 @@ def build_schedule() -> list[ScheduleDefinition]:
         ),
         ScheduleDefinition(
             name="forecast-history-incremental",
-            interval_seconds=60 * 60,
+            interval_seconds=15 * 60,
             command=[
                 "docker",
                 "compose",
@@ -70,12 +70,14 @@ def build_schedule() -> list[ScheduleDefinition]:
                 "--all-discovered",
                 "--mode",
                 "incremental",
+                "--request-limit",
+                "500",
             ],
-            description="Refresh recent history windows for all active contracts.",
+            description="Continuously refresh recent history windows for a bounded batch of active contracts.",
         ),
         ScheduleDefinition(
             name="forecast-history-backfill",
-            interval_seconds=24 * 60 * 60,
+            interval_seconds=60 * 60,
             command=[
                 "docker",
                 "compose",
@@ -86,8 +88,10 @@ def build_schedule() -> list[ScheduleDefinition]:
                 "--all-discovered",
                 "--mode",
                 "backfill",
+                "--request-limit",
+                "1000",
             ],
-            description="Backfill currently available history windows for all active contracts.",
+            description="Continuously fill missing history windows and retry sparse no-data contracts in bounded batches.",
         ),
     ]
 
