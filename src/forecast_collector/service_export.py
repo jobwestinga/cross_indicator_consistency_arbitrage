@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,6 +76,91 @@ class DatasetExportService:
             files=exported_files,
             message=(
                 f"Exported {total_rows} rows across {len(exported_files)} files "
+                f"to {bundle_path}"
+            ),
+        )
+
+    def export_sqlite(
+        self,
+        output_dir: Path,
+        *,
+        dataset_name: str | None = None,
+        underlying_conid: int | None = None,
+        since: datetime | None = None,
+    ) -> DatasetExportSummary:
+        generated_at = datetime.now(tz=UTC)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if dataset_name is None:
+            dataset_name = f"forecast_analysis_dataset_{generated_at:%Y%m%dT%H%M%SZ}.sqlite"
+        elif not dataset_name.endswith(".sqlite"):
+            dataset_name = f"{dataset_name}.sqlite"
+
+        bundle_path = output_dir / dataset_name
+        if bundle_path.exists():
+            bundle_path.unlink()
+
+        specs = self._build_specs(underlying_conid=underlying_conid, since=since)
+        exported_files: list[DatasetExportFile] = []
+
+        with sqlite3.connect(bundle_path) as sqlite_conn:
+            for spec in specs:
+                row_count = self.repository.write_query_sqlite(
+                    spec.key,
+                    spec.query,
+                    sqlite_conn,
+                    spec.key,
+                    spec.params,
+                )
+                exported_files.append(DatasetExportFile(name=spec.key, rows=row_count))
+
+            sqlite_conn.execute("DROP TABLE IF EXISTS export_manifest")
+            sqlite_conn.execute(
+                """
+                CREATE TABLE export_manifest (
+                    generated_at TEXT NOT NULL,
+                    underlying_conid INTEGER,
+                    since TEXT
+                )
+                """
+            )
+            sqlite_conn.execute(
+                """
+                INSERT INTO export_manifest (generated_at, underlying_conid, since)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    generated_at.isoformat(),
+                    underlying_conid,
+                    since.isoformat() if since is not None else None,
+                ),
+            )
+            sqlite_conn.execute("DROP TABLE IF EXISTS export_tables")
+            sqlite_conn.execute(
+                """
+                CREATE TABLE export_tables (
+                    table_name TEXT NOT NULL,
+                    rows INTEGER NOT NULL
+                )
+                """
+            )
+            sqlite_conn.executemany(
+                """
+                INSERT INTO export_tables (table_name, rows)
+                VALUES (?, ?)
+                """,
+                [(item.name, item.rows) for item in exported_files],
+            )
+
+        total_rows = sum(item.rows for item in exported_files)
+        return DatasetExportSummary(
+            bundle_path=str(bundle_path),
+            generated_at=generated_at,
+            underlying_conid=underlying_conid,
+            since=since,
+            files=exported_files,
+            message=(
+                f"Exported {total_rows} rows across {len(exported_files)} tables "
                 f"to {bundle_path}"
             ),
         )

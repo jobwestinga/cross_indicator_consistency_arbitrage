@@ -34,6 +34,7 @@ python -m forecast_collector.cli collect-probabilities --all-discovered
 python -m forecast_collector.cli collect-history --all-discovered --mode incremental --request-limit 500
 python -m forecast_collector.cli collect-history --all-discovered --mode backfill --request-limit 1000
 python -m forecast_collector.cli export-analysis-dataset --output-dir exports
+python -m forecast_collector.cli export-analysis-sqlite --output-dir exports
 python -m forecast_collector.cli collect-history --underlying-conid 793085688 --mode backfill --contract-limit 6 --history-periods 1week
 python -m forecast_collector.cli report-health
 ```
@@ -181,10 +182,41 @@ python -m forecast_collector.cli export-analysis-dataset \
   --since 2026-03-01
 ```
 
+If you want a single portable file for local analysis, export the same dataset
+as SQLite instead:
+
+```bash
+python -m forecast_collector.cli export-analysis-sqlite \
+  --output-dir exports \
+  --since 2026-03-01
+```
+
+That writes a file such as
+`exports/forecast_analysis_dataset_20260323T120000Z.sqlite` containing:
+
+- `market_categories`
+- `markets`
+- `contracts`
+- `projected_probabilities`
+- `open_interest_snapshots`
+- `contract_history`
+- `export_manifest`
+- `export_tables`
+
+This is the easiest handoff format when you want to copy one file off the VPS
+and inspect everything locally with sqlite, pandas, DuckDB, or DB Browser for
+SQLite.
+
 To copy a bundle off the VPS:
 
 ```bash
 scp job090305@your-server:~/cross_indicator_consistency_arbitrage/exports/forecast_analysis_dataset_*.zip .
+```
+
+To copy the SQLite export off the VPS:
+
+```bash
+scp job090305@your-server:~/cross_indicator_consistency_arbitrage/exports/forecast_analysis_dataset_*.sqlite .
 ```
 
 ## Docker Compose
@@ -209,6 +241,7 @@ docker compose run --rm collector collect-probabilities --all-discovered
 docker compose run --rm collector collect-history --all-discovered --mode incremental --request-limit 500
 docker compose run --rm collector collect-history --all-discovered --mode backfill --request-limit 1000
 docker compose run --rm collector export-analysis-dataset --output-dir exports
+docker compose run --rm collector export-analysis-sqlite --output-dir exports
 ```
 
 Run a specific test module:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -234,6 +235,31 @@ class FakeExportRepository:
         output.write(payload)
         return max(0, len(payload.strip().splitlines()) - 1)
 
+    def write_query_sqlite(
+        self,
+        cursor_label: str,
+        query: str,
+        sqlite_conn: sqlite3.Connection,
+        table_name: str,
+        params: tuple | None = None,
+        *,
+        fetch_size: int = 10_000,
+    ) -> int:
+        del query, params, fetch_size
+        self.calls.append((cursor_label, tuple()))
+        payload = self.payloads[cursor_label].strip().splitlines()
+        headers = payload[0].split(",")
+        rows = [line.split(",") for line in payload[1:]]
+        quoted_headers = ", ".join(f'"{header}"' for header in headers)
+        sqlite_conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        sqlite_conn.execute(f'CREATE TABLE "{table_name}" ({quoted_headers})')
+        placeholders = ", ".join("?" for _ in headers)
+        sqlite_conn.executemany(
+            f'INSERT INTO "{table_name}" VALUES ({placeholders})',
+            rows,
+        )
+        return len(rows)
+
 
 def test_history_collection_continues_when_one_request_fails() -> None:
     settings = SimpleNamespace(
@@ -373,3 +399,56 @@ def test_dataset_export_creates_shareable_zip_bundle(tmp_path: Path) -> None:
     assert manifest["since"] == since.isoformat()
     assert repository.calls[0][0] == "market_categories"
     assert repository.calls[-1][0] == "contract_history"
+
+
+def test_dataset_export_creates_single_file_sqlite_bundle(tmp_path: Path) -> None:
+    repository = FakeExportRepository()
+    since = datetime(2026, 3, 1, tzinfo=UTC)
+
+    summary = DatasetExportService(repository).export_sqlite(
+        tmp_path,
+        dataset_name="analysis_snapshot",
+        underlying_conid=793085688,
+        since=since,
+    )
+
+    bundle_path = tmp_path / "analysis_snapshot.sqlite"
+
+    assert bundle_path.exists()
+    assert summary.bundle_path == str(bundle_path)
+    assert [item.name for item in summary.files] == [
+        "market_categories",
+        "markets",
+        "contracts",
+        "projected_probabilities",
+        "open_interest_snapshots",
+        "contract_history",
+    ]
+
+    with sqlite3.connect(bundle_path) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        manifest = conn.execute(
+            "SELECT generated_at, underlying_conid, since FROM export_manifest"
+        ).fetchone()
+        export_tables = dict(
+            conn.execute("SELECT table_name, rows FROM export_tables").fetchall()
+        )
+
+    assert {
+        "market_categories",
+        "markets",
+        "contracts",
+        "projected_probabilities",
+        "open_interest_snapshots",
+        "contract_history",
+        "export_manifest",
+        "export_tables",
+    }.issubset(tables)
+    assert manifest[1] == 793085688
+    assert manifest[2] == since.isoformat()
+    assert export_tables["contract_history"] == 1

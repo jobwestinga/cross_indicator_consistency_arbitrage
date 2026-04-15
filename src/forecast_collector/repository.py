@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import csv
+import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -82,6 +83,72 @@ class CollectorRepository:
                         row_count += 1
         output.flush()
         return row_count
+
+    def write_query_sqlite(
+        self,
+        cursor_label: str,
+        query: str,
+        sqlite_conn: sqlite3.Connection,
+        table_name: str,
+        params: Sequence[Any] | None = None,
+        *,
+        fetch_size: int = 10_000,
+    ) -> int:
+        row_count = 0
+        with self.conn.transaction():
+            with self.conn.cursor(
+                name=f"export_{cursor_label}_{uuid.uuid4().hex[:8]}",
+                row_factory=dict_row,
+            ) as cur:
+                cur.execute(query, tuple(params or ()))
+                fieldnames = [column.name for column in (cur.description or ())]
+                if not fieldnames:
+                    raise RuntimeError(f"SQLite export query for {cursor_label} returned no columns")
+
+                quoted_table_name = self._quote_sqlite_identifier(table_name)
+                quoted_fieldnames = [self._quote_sqlite_identifier(name) for name in fieldnames]
+                sqlite_conn.execute(f"DROP TABLE IF EXISTS {quoted_table_name}")
+                sqlite_conn.execute(
+                    f"CREATE TABLE {quoted_table_name} ({', '.join(quoted_fieldnames)})"
+                )
+
+                placeholders = ", ".join("?" for _ in fieldnames)
+                sqlite_conn.executemany(
+                    f"INSERT INTO {quoted_table_name} ({', '.join(quoted_fieldnames)}) VALUES ({placeholders})",
+                    self._iter_sqlite_rows(cur, fieldnames, fetch_size=fetch_size),
+                )
+                row_count = sqlite_conn.execute(
+                    f"SELECT COUNT(*) FROM {quoted_table_name}"
+                ).fetchone()[0]
+
+        return int(row_count)
+
+    @staticmethod
+    def _iter_sqlite_rows(
+        cur: psycopg.Cursor[Any],
+        fieldnames: Sequence[str],
+        *,
+        fetch_size: int,
+    ) -> Iterator[tuple[Any, ...]]:
+        while True:
+            rows = cur.fetchmany(fetch_size)
+            if not rows:
+                break
+            for row in rows:
+                yield tuple(
+                    CollectorRepository._normalize_sqlite_value(dict(row).get(fieldname))
+                    for fieldname in fieldnames
+                )
+
+    @staticmethod
+    def _normalize_sqlite_value(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    @staticmethod
+    def _quote_sqlite_identifier(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
 
     def run_migrations(self, sql_directory: Path) -> None:
         self.conn.execute(

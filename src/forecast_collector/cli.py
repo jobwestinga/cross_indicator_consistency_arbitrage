@@ -284,6 +284,42 @@ def export_analysis_dataset(
     _print_summary(summary)
 
 
+@app.command("export-analysis-sqlite")
+def export_analysis_sqlite(
+    output_dir: Path = typer.Option(
+        Path("exports"),
+        "--output-dir",
+        help="Directory where the SQLite dataset file will be written.",
+    ),
+    dataset_name: str | None = typer.Option(
+        None,
+        "--dataset-name",
+        help="Optional output filename. '.sqlite' is added automatically when omitted.",
+    ),
+    underlying_conid: int | None = typer.Option(
+        None,
+        "--underlying-conid",
+        help="Optional single-market export filter.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Optional ISO timestamp/date filter for time-series tables, for example 2026-03-01.",
+    ),
+) -> None:
+    settings = load_settings()
+    configure_logging(settings.log_level)
+    with CollectorRepository(settings.database_url) as repository:
+        service = DatasetExportService(repository)
+        summary = service.export_sqlite(
+            output_dir,
+            dataset_name=dataset_name,
+            underlying_conid=underlying_conid,
+            since=_resolve_since(since),
+        )
+    _print_summary(summary)
+
+
 def main() -> None:
     app()
 
