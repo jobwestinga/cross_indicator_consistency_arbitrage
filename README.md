@@ -219,6 +219,55 @@ To copy the SQLite export off the VPS:
 scp job090305@your-server:~/cross_indicator_consistency_arbitrage/exports/forecast_analysis_dataset_*.sqlite .
 ```
 
+## GitHub Deploy
+
+The clean production model is:
+
+- GitHub is the source of truth for code.
+- The server repo stays clean and should not be edited by hand.
+- Every push to `main` triggers a GitHub Actions deploy.
+- The deploy pulls the latest `main`, rebuilds the Docker services, and runs migrations.
+
+This repository includes:
+
+- `.github/workflows/deploy-prod.yml`
+- `deploy/deploy_from_github.sh`
+
+To enable it, add the following in GitHub:
+
+- Repository variable `PROD_HOST`
+- Repository variable `PROD_USER`
+- Repository variable `PROD_REPO_DIR`
+- Optional repository variable `PROD_SSH_PORT`
+- Repository secret `PROD_SSH_PRIVATE_KEY`
+
+Typical values:
+
+```text
+PROD_HOST=your-server-host-or-ip
+PROD_USER=your-server-user
+PROD_REPO_DIR=/home/your-server-user/cross_indicator_consistency_arbitrage
+PROD_SSH_PORT=22
+```
+
+Generate a dedicated deploy key locally:
+
+```bash
+ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/forecast_prod_deploy
+```
+
+Install the public key on the server:
+
+```bash
+cat ~/.ssh/forecast_prod_deploy.pub | ssh your-server-user@your-server-host "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+Then copy the private key into the GitHub Actions secret `PROD_SSH_PRIVATE_KEY`.
+
+After that, each push to `main` should deploy automatically. If the workflow
+fails because the server repo has tracked local changes, clean those up first so
+the server can remain a pure deploy target.
+
 ## Docker Compose
 
 The repository includes:

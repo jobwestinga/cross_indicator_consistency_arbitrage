@@ -23,3 +23,5 @@ Thumbs.db
 # Environment
 .env
 *.log
+exports/
+deploy/systemd/generated/

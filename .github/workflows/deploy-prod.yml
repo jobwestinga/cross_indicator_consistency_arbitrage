@@ -1,0 +1,63 @@
+name: Deploy Production
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH access
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+          PROD_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+        run: |
+          : "${PROD_HOST:?Missing repository variable PROD_HOST}"
+          : "${PROD_SSH_PRIVATE_KEY:?Missing repository secret PROD_SSH_PRIVATE_KEY}"
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          if [ -n "${PROD_PORT:-}" ]; then
+            ssh-keyscan -p "$PROD_PORT" -H "$PROD_HOST" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Deploy latest main to production
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+          PROD_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_REPO_DIR: ${{ vars.PROD_REPO_DIR }}
+          PROD_USER: ${{ vars.PROD_USER }}
+        run: |
+          : "${PROD_HOST:?Missing repository variable PROD_HOST}"
+          : "${PROD_USER:?Missing repository variable PROD_USER}"
+
+          SSH_TARGET="$PROD_USER@$PROD_HOST"
+          SSH_ARGS=()
+
+          if [ -n "${PROD_PORT:-}" ]; then
+            SSH_ARGS+=(-p "$PROD_PORT")
+          fi
+
+          if [ -n "${PROD_REPO_DIR:-}" ]; then
+            ssh "${SSH_ARGS[@]}" "$SSH_TARGET" \
+              "REPO_DIR='$PROD_REPO_DIR' BRANCH='main' bash -s" \
+              < deploy/deploy_from_github.sh
+          else
+            ssh "${SSH_ARGS[@]}" "$SSH_TARGET" \
+              "BRANCH='main' bash -s" \
+              < deploy/deploy_from_github.sh
+          fi
