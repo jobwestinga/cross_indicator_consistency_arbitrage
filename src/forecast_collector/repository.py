@@ -6,6 +6,7 @@ import csv
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 from datetime import UTC, datetime, timedelta
 from io import TextIOBase
 from pathlib import Path
@@ -144,6 +145,8 @@ class CollectorRepository:
     def _normalize_sqlite_value(value: Any) -> Any:
         if isinstance(value, datetime):
             return value.isoformat()
+        if isinstance(value, Decimal):
+            return float(value)
         return value
 
     @staticmethod

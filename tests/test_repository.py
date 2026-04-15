@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -72,3 +73,7 @@ def test_repository_upserts_market_and_contract(monkeypatch: pytest.MonkeyPatch)
 
     assert len(rows) >= 1
     assert rows[0]["conid"] == 767285167
+
+
+def test_normalize_sqlite_value_converts_decimal() -> None:
+    assert CollectorRepository._normalize_sqlite_value(Decimal("1.25")) == 1.25
