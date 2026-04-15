@@ -112,34 +112,28 @@ class CollectorRepository:
                 sqlite_conn.execute(
                     f"CREATE TABLE {quoted_table_name} ({', '.join(quoted_fieldnames)})"
                 )
+                sqlite_conn.commit()
 
-                placeholders = ", ".join("?" for _ in fieldnames)
-                sqlite_conn.executemany(
-                    f"INSERT INTO {quoted_table_name} ({', '.join(quoted_fieldnames)}) VALUES ({placeholders})",
-                    self._iter_sqlite_rows(cur, fieldnames, fetch_size=fetch_size),
+                insert_sql = (
+                    f"INSERT INTO {quoted_table_name} ({', '.join(quoted_fieldnames)}) "
+                    f"VALUES ({', '.join('?' for _ in fieldnames)})"
                 )
-                row_count = sqlite_conn.execute(
-                    f"SELECT COUNT(*) FROM {quoted_table_name}"
-                ).fetchone()[0]
+                while True:
+                    rows = cur.fetchmany(fetch_size)
+                    if not rows:
+                        break
+                    normalized_rows = [
+                        tuple(
+                            self._normalize_sqlite_value(dict(row).get(fieldname))
+                            for fieldname in fieldnames
+                        )
+                        for row in rows
+                    ]
+                    sqlite_conn.executemany(insert_sql, normalized_rows)
+                    sqlite_conn.commit()
+                    row_count += len(normalized_rows)
 
         return int(row_count)
-
-    @staticmethod
-    def _iter_sqlite_rows(
-        cur: psycopg.Cursor[Any],
-        fieldnames: Sequence[str],
-        *,
-        fetch_size: int,
-    ) -> Iterator[tuple[Any, ...]]:
-        while True:
-            rows = cur.fetchmany(fetch_size)
-            if not rows:
-                break
-            for row in rows:
-                yield tuple(
-                    CollectorRepository._normalize_sqlite_value(dict(row).get(fieldname))
-                    for fieldname in fieldnames
-                )
 
     @staticmethod
     def _normalize_sqlite_value(value: Any) -> Any:

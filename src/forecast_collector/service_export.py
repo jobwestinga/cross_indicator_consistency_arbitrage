@@ -151,6 +151,7 @@ class DatasetExportService:
                 """,
                 [(item.name, item.rows) for item in exported_files],
             )
+            sqlite_conn.commit()
 
         total_rows = sum(item.rows for item in exported_files)
         return DatasetExportSummary(
