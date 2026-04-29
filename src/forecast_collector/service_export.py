@@ -49,7 +49,7 @@ class DatasetExportService:
 
         with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for spec in specs:
-                with archive.open(spec.archive_name, "w") as raw_file:
+                with archive.open(spec.archive_name, "w", force_zip64=True) as raw_file:
                     with io.TextIOWrapper(raw_file, encoding="utf-8", newline="") as text_file:
                         row_count = self.repository.write_query_csv(
                             spec.key,
