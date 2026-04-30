@@ -255,8 +255,8 @@ class DatasetExportService:
                   ON m.underlying_conid = c.underlying_conid
                 WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
                   AND EXISTS (
-                      SELECT 1 FROM open_interest_snapshots oi
-                      WHERE oi.conid = c.conid AND oi.open_interest > 0
+                      SELECT 1 FROM contract_history h
+                      WHERE h.conid = c.conid
                   )
                 ORDER BY c.underlying_conid, c.conid
                 """,
@@ -283,35 +283,6 @@ class DatasetExportService:
                   AND p.probability > 0
                   AND p.probability < 1
                 ORDER BY p.underlying_conid, p.collected_at, p.expiry, p.strike
-                """,
-                params=(underlying_conid, underlying_conid, since, since),
-            ),
-            ExportSpec(
-                key="open_interest_snapshots",
-                archive_name="open_interest_snapshots.csv",
-                query="""
-                SELECT
-                    c.underlying_conid,
-                    m.market_name,
-                    m.symbol AS market_symbol,
-                    c.conid,
-                    c.side,
-                    c.strike,
-                    c.strike_label,
-                    c.expiration,
-                    c.expiry_label,
-                    c.question,
-                    s.open_interest,
-                    s.collected_at
-                FROM open_interest_snapshots AS s
-                JOIN contracts AS c
-                  ON c.conid = s.conid
-                JOIN markets AS m
-                  ON m.underlying_conid = c.underlying_conid
-                WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
-                  AND (%s::timestamptz IS NULL OR s.collected_at >= %s::timestamptz)
-                  AND s.open_interest > 0
-                ORDER BY c.underlying_conid, c.conid, s.collected_at
                 """,
                 params=(underlying_conid, underlying_conid, since, since),
             ),
@@ -344,10 +315,6 @@ class DatasetExportService:
                   ON m.underlying_conid = c.underlying_conid
                 WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
                   AND (%s::timestamptz IS NULL OR h.ts_utc >= %s::timestamptz)
-                  AND EXISTS (
-                      SELECT 1 FROM open_interest_snapshots oi
-                      WHERE oi.conid = c.conid AND oi.open_interest > 0
-                  )
                 ORDER BY c.underlying_conid, c.conid, h.period_requested, h.ts_utc
                 """,
                 params=(underlying_conid, underlying_conid, since, since),
