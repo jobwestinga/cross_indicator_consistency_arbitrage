@@ -254,6 +254,10 @@ class DatasetExportService:
                 JOIN markets AS m
                   ON m.underlying_conid = c.underlying_conid
                 WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
+                  AND EXISTS (
+                      SELECT 1 FROM open_interest_snapshots oi
+                      WHERE oi.conid = c.conid AND oi.open_interest > 0
+                  )
                 ORDER BY c.underlying_conid, c.conid
                 """,
                 params=(underlying_conid, underlying_conid),
@@ -276,6 +280,8 @@ class DatasetExportService:
                   ON m.underlying_conid = p.underlying_conid
                 WHERE (%s::bigint IS NULL OR p.underlying_conid = %s::bigint)
                   AND (%s::timestamptz IS NULL OR p.collected_at >= %s::timestamptz)
+                  AND p.probability > 0
+                  AND p.probability < 1
                 ORDER BY p.underlying_conid, p.collected_at, p.expiry, p.strike
                 """,
                 params=(underlying_conid, underlying_conid, since, since),
@@ -304,6 +310,7 @@ class DatasetExportService:
                   ON m.underlying_conid = c.underlying_conid
                 WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
                   AND (%s::timestamptz IS NULL OR s.collected_at >= %s::timestamptz)
+                  AND s.open_interest > 0
                 ORDER BY c.underlying_conid, c.conid, s.collected_at
                 """,
                 params=(underlying_conid, underlying_conid, since, since),
@@ -337,6 +344,10 @@ class DatasetExportService:
                   ON m.underlying_conid = c.underlying_conid
                 WHERE (%s::bigint IS NULL OR c.underlying_conid = %s::bigint)
                   AND (%s::timestamptz IS NULL OR h.ts_utc >= %s::timestamptz)
+                  AND EXISTS (
+                      SELECT 1 FROM open_interest_snapshots oi
+                      WHERE oi.conid = c.conid AND oi.open_interest > 0
+                  )
                 ORDER BY c.underlying_conid, c.conid, h.period_requested, h.ts_utc
                 """,
                 params=(underlying_conid, underlying_conid, since, since),
