@@ -25,3 +25,4 @@ Thumbs.db
 *.log
 exports/
 deploy/systemd/generated/
+forecast_analysis_dataset_*/
