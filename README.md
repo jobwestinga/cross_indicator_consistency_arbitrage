@@ -219,6 +219,39 @@ To copy the SQLite export off the VPS:
 scp job090305@your-server:~/cross_indicator_consistency_arbitrage/exports/forecast_analysis_dataset_*.sqlite .
 ```
 
+## Local Inspection
+
+Once you have a SQLite export on your machine, run the first-pass inspection
+script:
+
+```bash
+python3 analysis/inspect_dataset.py ~/forecast_analysis_dataset_fixed_retry.sqlite
+```
+
+If you omit the path, the script looks for the newest local file matching
+`forecast_analysis_dataset*.sqlite` in the current directory or your home
+directory.
+
+Useful options:
+
+```bash
+python3 analysis/inspect_dataset.py --top-n 15
+python3 analysis/inspect_dataset.py --underlying-conid 793085688
+python3 analysis/inspect_dataset.py --underlying-conid 793085688 --include-heavy
+```
+
+The script is intentionally cheap by default, even on large exports. It prints:
+
+- dataset metadata and exported row counts
+- time coverage for projected probabilities, open interest, and history
+- high-level market and contract counts
+- top categories
+- top markets by contract count
+
+When you pass `--underlying-conid`, it also prints a focused market summary and
+sample contracts. Add `--include-heavy` if you also want per-market time-series
+counts for that specific market.
+
 ## GitHub Deploy
 
 The clean production model is:
