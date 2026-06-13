@@ -19,7 +19,6 @@ That command writes one `.service` and one `.timer` file for each scheduled job:
 
 - `forecast-discover`
 - `forecast-structure`
-- `forecast-open-interest`
 - `forecast-probabilities`
 - `forecast-history-incremental`
 - `forecast-history-backfill`
@@ -31,7 +30,6 @@ sudo cp deploy/systemd/generated/* /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now forecast-discover.timer
 sudo systemctl enable --now forecast-structure.timer
-sudo systemctl enable --now forecast-open-interest.timer
 sudo systemctl enable --now forecast-probabilities.timer
 sudo systemctl enable --now forecast-history-incremental.timer
 sudo systemctl enable --now forecast-history-backfill.timer
@@ -45,7 +43,6 @@ The generated timers are designed to work together:
 
 - `forecast-discover`: find newly listed markets every hour
 - `forecast-structure`: refresh contract ladders every 6 hours
-- `forecast-open-interest`: refresh current open-interest snapshots every 15 minutes
 - `forecast-probabilities`: refresh current projected probabilities every 30 minutes
 - `forecast-history-incremental`: refresh recent history in bounded batches every 15 minutes
 - `forecast-history-backfill`: fill missing history holes in bounded batches every hour

@@ -10,11 +10,14 @@ def test_scheduler_builds_all_expected_jobs() -> None:
     assert names == [
         "forecast-discover",
         "forecast-structure",
-        "forecast-open-interest",
         "forecast-probabilities",
         "forecast-history-incremental",
         "forecast-history-backfill",
     ]
+
+    # Open-interest collection was removed: the upstream public endpoint returns
+    # an empty open_interest field for every contract, so it only ever stored zeros.
+    assert "forecast-open-interest" not in names
 
     history_incremental = next(
         definition for definition in schedule if definition.name == "forecast-history-incremental"

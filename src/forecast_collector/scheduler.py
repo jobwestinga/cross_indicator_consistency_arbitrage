@@ -30,20 +30,6 @@ def build_schedule() -> list[ScheduleDefinition]:
             description="Refresh ladder and contract-detail structure for all active markets.",
         ),
         ScheduleDefinition(
-            name="forecast-open-interest",
-            interval_seconds=15 * 60,
-            command=[
-                "docker",
-                "compose",
-                "run",
-                "--rm",
-                "collector",
-                "collect-open-interest",
-                "--all-discovered",
-            ],
-            description="Collect batched open-interest snapshots for all active markets.",
-        ),
-        ScheduleDefinition(
             name="forecast-probabilities",
             interval_seconds=30 * 60,
             command=[
