@@ -8,13 +8,16 @@ Usage:
 
 Optional:
     python3 analysis/explore_dataset.py --zip path/to/file.zip
+    python3 analysis/explore_dataset.py --no-figures   # stats only, fast
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -22,6 +25,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
+STATS_DIR = Path(__file__).resolve().parent / "stats"
 
 
 def find_latest_zip() -> Path:
@@ -63,6 +67,113 @@ def print_summary(tables: dict[str, pd.DataFrame]) -> None:
     if not prob.empty:
         prob_ts = pd.to_datetime(prob["collected_at"])
         print(f"Probability range   : {prob_ts.min()}  ->  {prob_ts.max()}")
+
+
+def _ts_range(series: pd.Series) -> dict[str, object]:
+    """Min/max/days/count for a datetime-like column, JSON-safe."""
+    ts = pd.to_datetime(series, errors="coerce").dropna()
+    if ts.empty:
+        return {"count": 0, "min": None, "max": None, "span_days": None}
+    return {
+        "count": int(len(ts)),
+        "min": ts.min().isoformat(),
+        "max": ts.max().isoformat(),
+        "span_days": round((ts.max() - ts.min()).total_seconds() / 86400, 2),
+    }
+
+
+def build_stats(tables: dict[str, pd.DataFrame], zip_path: Path) -> dict:
+    """Assemble a machine-readable summary of the whole bundle."""
+    markets = tables["markets"]
+    contracts = tables["contracts"]
+    hist = tables["contract_history"]
+    prob = tables["projected_probabilities"]
+
+    prob_vals = pd.to_numeric(prob.get("probability"), errors="coerce").dropna()
+    # Coarse buckets so you can see if probs cluster at 0/1 (degenerate) or spread.
+    bucket_edges = [0, 0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99, 1.0]
+    prob_buckets: dict[str, int] = {}
+    if not prob_vals.empty:
+        cut = pd.cut(prob_vals, bins=bucket_edges, include_lowest=True)
+        prob_buckets = {str(k): int(v) for k, v in cut.value_counts().sort_index().items()}
+
+    return {
+        "source_zip": zip_path.name,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "row_counts": {name: int(len(df)) for name, df in sorted(tables.items())},
+        "markets": {
+            "total": int(len(markets)),
+            "active": int(markets["active"].sum()) if "active" in markets else None,
+            "with_history": int(hist["underlying_conid"].nunique()) if not hist.empty else 0,
+            "with_probabilities": (
+                int(prob["underlying_conid"].nunique())
+                if "underlying_conid" in prob else None
+            ),
+        },
+        "contracts": {
+            "total": int(len(contracts)),
+            "per_market_median": (
+                float(contracts.groupby("underlying_conid").size().median())
+                if "underlying_conid" in contracts and not contracts.empty else None
+            ),
+        },
+        "history_time_range": _ts_range(hist["ts_utc"]) if "ts_utc" in hist else {},
+        "probability_time_range": (
+            _ts_range(prob["collected_at"]) if "collected_at" in prob else {}
+        ),
+        "probability_distribution": {
+            "n": int(len(prob_vals)),
+            "mean": round(float(prob_vals.mean()), 4) if not prob_vals.empty else None,
+            "buckets": prob_buckets,
+        },
+    }
+
+
+def build_per_market(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """One row per market: identifiers + coverage counts, sorted by history depth."""
+    markets = tables["markets"].copy()
+    contracts = tables["contracts"]
+    hist = tables["contract_history"]
+    prob = tables["projected_probabilities"]
+    cats = tables["market_categories"].set_index("category_key")["category_name"]
+
+    def _counts(df: pd.DataFrame, col: str) -> pd.Series:
+        if df.empty or "underlying_conid" not in df:
+            return pd.Series(dtype="int64")
+        return df.groupby("underlying_conid").size().rename(col)
+
+    out = markets.set_index("underlying_conid")
+    out = out.join(_counts(contracts, "n_contracts"))
+    out = out.join(_counts(hist, "n_history_rows"))
+    out = out.join(_counts(prob, "n_prob_rows"))
+
+    if not hist.empty and "ts_utc" in hist:
+        h = hist.copy()
+        h["ts_utc"] = pd.to_datetime(h["ts_utc"], errors="coerce")
+        span = h.groupby("underlying_conid")["ts_utc"].agg(["min", "max"])
+        out = out.join(span.rename(columns={"min": "history_start", "max": "history_end"}))
+
+    out["category_name"] = out["category_key"].map(cats) if "category_key" in out else None
+    keep = [c for c in [
+        "market_name", "category_name", "active",
+        "n_contracts", "n_history_rows", "n_prob_rows",
+        "history_start", "history_end",
+    ] if c in out.columns]
+    out = out[keep].fillna({"n_contracts": 0, "n_history_rows": 0, "n_prob_rows": 0})
+    sort_col = "n_history_rows" if "n_history_rows" in out else keep[0]
+    return out.sort_values(sort_col, ascending=False).reset_index()
+
+
+def write_stats(tables: dict[str, pd.DataFrame], zip_path: Path) -> tuple[Path, Path]:
+    STATS_DIR.mkdir(exist_ok=True)
+    stats = build_stats(tables, zip_path)
+    json_path = STATS_DIR / "dataset_stats.json"
+    json_path.write_text(json.dumps(stats, indent=2))
+
+    per_market = build_per_market(tables)
+    csv_path = STATS_DIR / "per_market_stats.csv"
+    per_market.to_csv(csv_path, index=False)
+    return json_path, csv_path
 
 
 def fig_markets_per_category(tables: dict[str, pd.DataFrame]) -> Path:
@@ -184,14 +295,26 @@ def fig_daily_activity(tables: dict[str, pd.DataFrame]) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Explore the forecast dataset.")
     parser.add_argument("--zip", type=Path, default=None, help="Path to dataset zip.")
+    parser.add_argument(
+        "--no-figures", action="store_true",
+        help="Skip matplotlib figures; write stats files only (fast).",
+    )
     args = parser.parse_args()
 
     zip_path = args.zip or find_latest_zip()
-    FIGURES_DIR.mkdir(exist_ok=True)
 
     tables = load_tables(zip_path)
     print_summary(tables)
 
+    print("\n=== Writing stats ===")
+    json_path, csv_path = write_stats(tables, zip_path)
+    print(f"  -> {json_path}")
+    print(f"  -> {csv_path}")
+
+    if args.no_figures:
+        return
+
+    FIGURES_DIR.mkdir(exist_ok=True)
     print("\n=== Generating figures ===")
     print(f"  -> {fig_markets_per_category(tables)}")
     print(f"  -> {fig_probability_distribution(tables)}")

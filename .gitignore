@@ -26,3 +26,10 @@ Thumbs.db
 exports/
 deploy/systemd/generated/
 forecast_analysis_dataset_*/
+
+# Local-only ops docs (private: host details, keys, runbooks)
+*.local.md
+
+# Local analysis data artifacts (large / regenerable)
+analysis/macro/
+forecast_analysis_dataset_*.zip

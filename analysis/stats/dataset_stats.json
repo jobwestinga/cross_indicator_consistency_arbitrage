@@ -1,0 +1,47 @@
+{
+  "source_zip": "forecast_analysis_dataset_20260621T170523Z.zip",
+  "generated_at": "2026-06-21T17:27:12.532843+00:00",
+  "row_counts": {
+    "contract_history": 2337349,
+    "contracts": 28795,
+    "market_categories": 602,
+    "markets": 1558,
+    "projected_probabilities": 12939455
+  },
+  "markets": {
+    "total": 1558,
+    "active": 977,
+    "with_history": 935,
+    "with_probabilities": 387
+  },
+  "contracts": {
+    "total": 28795,
+    "per_market_median": 4.0
+  },
+  "history_time_range": {
+    "count": 2337349,
+    "min": "2026-02-19T22:16:00+00:00",
+    "max": "2026-06-21T15:30:00+00:00",
+    "span_days": 121.72
+  },
+  "probability_time_range": {
+    "count": 12939455,
+    "min": "2026-03-20T12:55:19.542432+00:00",
+    "max": "2026-06-21T16:46:18.816497+00:00",
+    "span_days": 93.16
+  },
+  "probability_distribution": {
+    "n": 12939455,
+    "mean": 0.1134,
+    "buckets": {
+      "(-0.001, 0.01]": 6582157,
+      "(0.01, 0.05]": 1865131,
+      "(0.05, 0.25]": 2374403,
+      "(0.25, 0.5]": 1240381,
+      "(0.5, 0.75]": 483849,
+      "(0.75, 0.95]": 365378,
+      "(0.95, 0.99]": 22357,
+      "(0.99, 1.0]": 5799
+    }
+  }
+}
