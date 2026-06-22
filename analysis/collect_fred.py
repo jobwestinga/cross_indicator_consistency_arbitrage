@@ -78,6 +78,13 @@ def fetch_series(series_id: str, key: str) -> list[dict]:
     return payload["observations"]
 
 
+def parse_value(raw: object) -> float | None:
+    """FRED encodes missing observations as '.'; map those (and blanks) to None."""
+    if raw in (".", "", None):
+        return None
+    return float(raw)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -102,8 +109,7 @@ def store(conn: sqlite3.Connection, series_id: str, observations: list[dict]) ->
     now = datetime.now(timezone.utc).isoformat()
     rows = []
     for obs in observations:
-        raw = obs.get("value", ".")
-        value = None if raw in (".", "", None) else float(raw)
+        value = parse_value(obs.get("value", "."))
         rows.append((
             series_id, label, mapping, obs["date"], value,
             obs.get("realtime_start"), obs.get("realtime_end"), now,

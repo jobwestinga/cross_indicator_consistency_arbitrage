@@ -33,3 +33,9 @@ forecast_analysis_dataset_*/
 # Local analysis data artifacts (large / regenerable)
 analysis/macro/
 forecast_analysis_dataset_*.zip
+
+# Generated analysis outputs (regenerable from a bundle)
+analysis/consistency/
+analysis/validation/
+analysis/backtest/
+analysis/stats/
