@@ -1,0 +1,19 @@
+# Keep local data artifacts and generated outputs out of the image
+# (the VPS checkout never has these; this guards local builds).
+analysis/macro/
+analysis/cache/
+analysis/consistency/
+analysis/validation/
+analysis/backtest/
+analysis/stats/
+analysis/figures/
+analysis/arbitrage/
+analysis/report/
+analysis/oos/
+analysis/fed_path/
+analysis/discovery/
+forecast_analysis_dataset_*
+exports/
+.git/
+.pytest_cache/
+__pycache__/

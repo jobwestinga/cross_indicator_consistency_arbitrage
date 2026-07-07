@@ -6,7 +6,7 @@ ENV PYTHONPATH=/app/src
 
 WORKDIR /app
 
-COPY requirements.txt requirements-test.txt ./
+COPY requirements.txt requirements-test.txt requirements-analysis.txt ./
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements-test.txt
@@ -16,5 +16,6 @@ COPY src ./src
 COPY sql ./sql
 COPY samples ./samples
 COPY tests ./tests
+COPY analysis ./analysis
 
 ENTRYPOINT ["python", "-m", "forecast_collector.cli"]
