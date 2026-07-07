@@ -1,9 +1,5 @@
 # Keep this file aligned with [project.optional-dependencies].test in pyproject.toml.
 -r requirements.txt
+-r requirements-analysis.txt
 pytest>=8.3,<9.0
 pytest-httpx>=0.30,<1.0
-# analysis/ scripts (exploratory) and their tests
-pandas>=2.2,<3.0
-pyyaml>=6.0,<7.0
-matplotlib>=3.8,<4.0
-requests>=2.31,<3.0

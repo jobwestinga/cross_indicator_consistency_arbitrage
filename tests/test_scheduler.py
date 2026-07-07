@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("pydantic")  # collector dep; may be absent in analysis-only envs
+
 from forecast_collector.scheduler import build_schedule, render_service, render_timer
 
 

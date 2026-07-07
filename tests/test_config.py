@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("pydantic_settings")  # collector dep; not installed locally
+
 from forecast_collector.config import Settings
 
 

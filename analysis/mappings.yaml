@@ -1,13 +1,28 @@
 # Consistency-arbitrage rule mappings (machine-readable).
 #
-# Links each economic-identity rule (see strats.txt) to the ForecastTrader
-# markets it is computed from and the FRED series that provide realized
-# ground truth. Markets are referenced by `market_name`; the conid is resolved
-# at runtime from the bundle's markets.csv (conids can change, names are stable).
+# Links each economic-identity rule to the ForecastTrader markets it is
+# computed from and the FRED series that provide realized ground truth.
+# Markets are referenced by `market_name`; the conid is resolved at runtime
+# from the bundle's markets.csv (conids can change, names are stable).
 #
 # This is the single source of truth for what-pairs-with-what. Edit here, not
-# in code. NOTE: the project is at the EXPLORATORY/TESTING stage - these rules
-# are hypotheses to validate, not a proven trading signal.
+# in code. The engine (analysis/rules.py) understands two score types:
+#
+#   score: {type: product, terms: [roleA, roleB], sign: 1|-1}
+#       sign +1 -> the identity says the roles move OPPOSITE; same-direction
+#                  pricing (positive z-product) is the inconsistency.
+#       sign -1 -> the identity says the roles move TOGETHER; opposite-
+#                  direction pricing is the inconsistency.
+#   score: {type: linear, weights: {role: coefficient, ...}}
+#       spread/residual rules; score = weighted sum of role z-scores.
+#
+#   flag: {metric: value|abs, threshold: T}
+#
+# Optional per rule: `signal: prob|median` (default median); the same key on
+# an individual indicator overrides it for that leg only (thin markets).
+#
+# NOTE: the project is at the EXPLORATORY/TESTING stage - these rules are
+# hypotheses to validate, not a proven trading signal.
 
 defaults:
   # implied-probability band: drop degenerate near-0/near-1 contracts that carry
@@ -15,6 +30,8 @@ defaults:
   # informative contracts (matters for tail rules like Sahm/recession).
   prob_band: [0.001, 0.999]
   resample_freq: "1h"   # common grid; markets sit on slightly offset clocks
+  ffill_limit: 48       # max bars a value may be carried forward (staleness cap)
+  roll_days: 2          # stop tracking an expiry this many days before settlement
 
 rules:
   phillips:
@@ -34,10 +51,8 @@ rules:
         fred_series: "UNRATE"
         direction: "higher = looser labor (more unemployment)"
     logic:
-      # inconsistency score = z(inflation_prob) * z(unemployment_prob)
-      # positive => same-direction => Phillips-inconsistent
-      score: "z_inflation * z_unemployment"
-      flag_when: "score > 1.0"   # both ~1 sigma in the inconsistent corner
+      score: {type: product, terms: [inflation, labor], sign: 1}
+      flag: {metric: value, threshold: 1.0}
 
   sahm:
     description: >
@@ -46,9 +61,6 @@ rules:
       implied by the unemployment market while the Recession market keeps
       recession probability very low (or the reverse).
     status: implemented_basic
-    # Recession market is too thin for a survival-ladder median; use the
-    # single-strike probability signal instead.
-    signal: prob
     indicators:
       unemployment:
         market_name: "US Unemployment Rate"
@@ -58,39 +70,221 @@ rules:
         market_name: "US Recession"
         fred_series: "USREC"
         direction: "higher = recession priced"
+        signal: prob   # binary event market (dummy strike): no ladder median
     logic:
-      score: "z_unemployment - z_recession"
-      flag_when: "abs(score) > 1.5"
+      score: {type: linear, weights: {unemployment: 1, recession: -1}}
+      flag: {metric: abs, threshold: 1.5}
     notes: >
       Data-starved: Recession market is thin and has NO projected_probabilities,
       so it MUST be read from contract_history. Treat results as low-power.
 
-  # --- not yet implemented; specs here so the engine/config is complete ---
   taylor:
-    description: "Taylor rule. Inflation + slack -> policy rate."
-    status: planned
+    description: >
+      Taylor rule. Policy rate should track inflation and labor tightness.
+      Score = z(policy) - 0.5*z(inflation) + 0.5*z(unemployment): the residual
+      of priced policy against a crude z-space Taylor benchmark. Inconsistency
+      = policy priced far from what inflation + labor pricing implies (e.g.
+      hot inflation + tight labor, yet near-term cuts priced high).
+    status: implemented
     indicators:
-      inflation: {market_name: "US Consumer Price Index Yearly", fred_series: "CPIAUCSL"}
-      labor: {market_name: "US Unemployment Rate", fred_series: "UNRATE"}
-      policy: {market_name: "US Fed Funds Target Rate", fred_series: "FEDFUNDS"}
+      policy:
+        market_name: "US Fed Funds Target Rate"
+        fred_series: "FEDFUNDS"
+        direction: "higher = tighter policy priced"
+      inflation:
+        market_name: "US Consumer Price Index Yearly"
+        fred_series: "CPIAUCSL"
+        direction: "higher = more inflation priced"
+      labor:
+        market_name: "US Unemployment Rate"
+        fred_series: "UNRATE"
+        direction: "higher = looser labor"
+    logic:
+      score: {type: linear, weights: {policy: 1, inflation: -0.5, labor: 0.5}}
+      flag: {metric: abs, threshold: 1.5}
+    notes: >
+      z-space proxy of the Taylor rule (no r*, no coefficients from theory);
+      treat as a coherence check, not a calibrated reaction function.
 
   okun:
-    description: "Okun's law. Growth <-> unemployment."
-    status: planned
+    description: >
+      Okun's law. Growth and unemployment move opposite. Inconsistency =
+      strong GDP priced together with rising unemployment (or weak GDP with
+      falling unemployment) = same-direction pricing.
+    status: implemented
     indicators:
-      growth: {market_name: "US Real GDP", fred_series: "GDPC1"}
-      labor: {market_name: "US Unemployment Rate", fred_series: "UNRATE"}
+      growth:
+        market_name: "US Real GDP"
+        fred_series: "GDPC1"
+        direction: "higher = stronger growth priced"
+      labor:
+        market_name: "US Unemployment Rate"
+        fred_series: "UNRATE"
+        direction: "higher = looser labor"
+    logic:
+      score: {type: product, terms: [growth, labor], sign: 1}
+      flag: {metric: value, threshold: 1.0}
+    notes: GDP market is thin (~800 rows in the Apr-30 bundle); expect low power.
+
+  okun_canada:
+    description: >
+      Okun's law, Canada replication (B11). Same identity as `okun` on
+      independent markets -> extra independent events for the rule family.
+    status: implemented_basic
+    indicators:
+      growth:
+        market_name: "Canada Real GDP"
+        fred_series: "NGDPRSAXDCCAQ"
+        direction: "higher = stronger growth priced"
+      labor:
+        market_name: "Canada Unemployment Rate"
+        fred_series: "LRUNTTTTCAM156S"
+        direction: "higher = looser labor"
+    logic:
+      score: {type: product, terms: [growth, labor], sign: 1}
+      flag: {metric: value, threshold: 1.0}
+    notes: >
+      Both legs thin (GDP ~650 rows, unemployment ~2000 in the Jul-07 bundle);
+      Canada Recession market is dead (1 contract) so no sahm_canada.
 
   beveridge:
-    description: "Beveridge curve. Vacancies <-> unemployment."
-    status: planned
+    description: >
+      Beveridge curve. Vacancies and unemployment move opposite along the
+      curve. Inconsistency = both priced rising (or both falling) without a
+      structural-shift story.
+    status: implemented
     indicators:
-      vacancies: {market_name: "JOLTS", fred_series: "JTSJOL"}
-      labor: {market_name: "US Unemployment Rate", fred_series: "UNRATE"}
+      vacancies:
+        market_name: "JOLTS"
+        fred_series: "JTSJOL"
+        direction: "higher = more vacancies priced"
+      labor:
+        market_name: "US Unemployment Rate"
+        fred_series: "UNRATE"
+        direction: "higher = looser labor"
+    logic:
+      score: {type: product, terms: [vacancies, labor], sign: 1}
+      flag: {metric: value, threshold: 1.0}
 
   uip:
-    description: "Uncovered interest parity. Rate differential <-> FX."
+    description: >
+      UIP/carry benchmark. A widening US rate differential should coincide
+      with USDJPY priced higher (carry direction), narrowing with lower.
+      Inconsistency = rate differential and USDJPY priced in OPPOSITE
+      directions (e.g. differential narrows sharply but USDJPY still priced
+      to rise a lot).
+    status: implemented
+    indicators:
+      policy:
+        market_name: "US Fed Funds Target Rate"
+        fred_series: "FEDFUNDS"
+        direction: "higher = wider US-JP differential (BoJ ~static)"
+      fx:
+        market_name: "US Dollar to Japanese Yen Exchange Rate"
+        fred_series: "DEXJPUS"
+        direction: "higher = stronger USD vs JPY"
+    logic:
+      score: {type: product, terms: [policy, fx], sign: -1}
+      flag: {metric: value, threshold: 1.0}
+
+  claims_labor:
+    description: >
+      Leading-indicator coherence. Initial jobless claims lead the
+      unemployment rate; both are "labor weakening" gauges and should be
+      priced in the SAME direction. Inconsistency = claims priced surging
+      while unemployment priced falling (or vice versa).
+    status: implemented
+    indicators:
+      claims:
+        market_name: "US Initial Jobless Claims"
+        fred_series: "ICSA"
+        direction: "higher = weaker labor priced"
+      labor:
+        market_name: "US Unemployment Rate"
+        fred_series: "UNRATE"
+        direction: "higher = weaker labor priced"
+    logic:
+      score: {type: product, terms: [claims, labor], sign: -1}
+      flag: {metric: value, threshold: 1.0}
+
+  payrolls_labor:
+    description: >
+      Survey coherence. Payrolls (establishment survey) up should pair with
+      unemployment (household survey) down. Inconsistency = both priced in the
+      same direction.
+    status: implemented
+    indicators:
+      payrolls:
+        market_name: "US Payroll Employment"
+        fred_series: "PAYEMS"
+        direction: "higher = stronger labor demand priced"
+      labor:
+        market_name: "US Unemployment Rate"
+        fred_series: "UNRATE"
+        direction: "higher = looser labor"
+    logic:
+      score: {type: product, terms: [payrolls, labor], sign: 1}
+      flag: {metric: value, threshold: 1.0}
+
+  core_headline:
+    description: >
+      Aggregation coherence. Headline CPI = core + volatile food/energy; the
+      two markets should not price large opposite moves for long.
+      Inconsistency = headline and core CPI implied paths diverging strongly.
+    status: implemented
+    indicators:
+      headline:
+        market_name: "US Consumer Price Index Yearly"
+        fred_series: "CPIAUCSL"
+        direction: "higher = more headline inflation priced"
+      core:
+        market_name: "US Core CPI"
+        fred_series: "CPILFESL"
+        direction: "higher = more core inflation priced"
+    logic:
+      score: {type: linear, weights: {headline: 1, core: -1}}
+      flag: {metric: abs, threshold: 1.5}
+
+  pce_cpi:
+    description: >
+      Deflator coherence. Core PCE and Core CPI measure the same underlying
+      inflation with known wedge; large priced divergence is suspect.
+    status: implemented_basic
+    indicators:
+      pce:
+        market_name: "US Core PCE Price Index"
+        fred_series: "PCEPILFE"
+        direction: "higher = more inflation priced"
+      core:
+        market_name: "US Core CPI"
+        fred_series: "CPILFESL"
+        direction: "higher = more inflation priced"
+    logic:
+      score: {type: linear, weights: {pce: 1, core: -1}}
+      flag: {metric: abs, threshold: 1.5}
+    notes: PCE market is very thin (~800 rows, one expiry in the Apr-30 bundle).
+
+  # --- planned: identity-class rules (strongest economics, most engineering) ---
+  fed_path:
+    description: >
+      Same-event redundancy. "Fed Decision" (per-meeting cut/hold/hike),
+      "US Fed Funds Target Rate" (rate-level ladders per meeting) and
+      "Number of Fed Rate Cuts" (annual count) price the SAME object and are
+      linked by identity, not correlation: P(level <= x at meeting m) must be
+      consistent with the distribution over cut/hike paths through m.
+      Requires mapping contract semantics (meeting dates <-> levels <-> counts).
     status: planned
     indicators:
-      policy: {market_name: "US Fed Funds Target Rate", fred_series: "FEDFUNDS"}
-      fx: {market_name: "US Dollar to Japanese Yen Exchange Rate", fred_series: "DEXJPUS"}
+      decision: {market_name: "Fed Decision", fred_series: "DFF"}
+      level: {market_name: "US Fed Funds Target Rate", fred_series: "FEDFUNDS"}
+      cuts: {market_name: "Number of Fed Rate Cuts", fred_series: "FEDFUNDS"}
+
+  regional_cpi:
+    description: >
+      Aggregation identity. National CPI is a weighted average of regional
+      CPIs (NY, Chicago, Atlanta, DC, ... markets exist). The national market
+      cannot price far outside the weighted envelope of the regional markets.
+      Requires BLS regional weights.
+    status: planned
+    indicators:
+      national: {market_name: "US Consumer Price Index Yearly", fred_series: "CPIAUCSL"}

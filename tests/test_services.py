@@ -8,6 +8,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("pydantic_settings")  # collector dep; not installed locally
+
 from forecast_collector.models import ApiResponseEnvelope, HistoryCollectionMode
 from forecast_collector.service_export import DatasetExportService
 from forecast_collector.service_history import HistoryCollectorService

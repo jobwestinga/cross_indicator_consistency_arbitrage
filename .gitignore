@@ -39,3 +39,10 @@ analysis/consistency/
 analysis/validation/
 analysis/backtest/
 analysis/stats/
+analysis/arbitrage/
+analysis/report/
+analysis/cache/
+analysis/figures/
+analysis/oos/
+analysis/fed_path/
+analysis/discovery/

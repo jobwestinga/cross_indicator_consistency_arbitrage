@@ -1,147 +1,160 @@
 # analysis/
 
-Exploratory analysis + first vertical slice of the cross-indicator
-consistency-arbitrage strategy.
+Research pipeline for the cross-indicator consistency-arbitrage strategy.
 
 > **Status: EXPLORATORY / TESTING.** The strategy is unproven. These scripts
-> exist to validate whether the economic identities in `../strats.txt` carry any
-> tradeable signal. Nothing here is a production trading system. We trade only on
+> test whether economic identities carry tradeable signal on ForecastTrader
+> markets. Nothing here is a production trading system. We trade only on
 > ForecastTrader; FRED is ground-truth context only.
 
 ## Data sources
 
-- **IBKR forecast bundle** — `../forecast_analysis_dataset_*.zip` (export from the
-  VPS Postgres). Refresh procedure + VPS details are in `../RUNBOOK.local.md`
+- **IBKR forecast bundle** — `../forecast_analysis_dataset_*.zip` (export from
+  the VPS Postgres). Refresh procedure + VPS details: `../RUNBOOK.local.md`
   (gitignored).
 - **FRED macro ground truth** — `macro/fred.sqlite`, built by `collect_fred.py`.
+  NOTE: indexed by reference period, not release date — context only, never a
+  causal conditioning variable (vintages via `realtime_start` if ever needed).
 
-The canonical implied-probability signal is the IBKR `contract_history` table
-(avg traded price). `projected_probabilities` is intentionally **not** used for
-signal: it has gaps and is empty for some markets. See `signals.py`.
+The canonical implied signal is the `contract_history` table (avg traded
+price). `projected_probabilities` is NOT used for signal: it has gaps (9-day
+outage Jun 4–12 2026) and is empty for some markets.
 
 ## Scripts
 
 | Script | Purpose |
 |---|---|
+| `run_all.py` | **One command**: readiness → static-arb scan → all rules → validation (+`--grid`) → backtest → `report/REPORT.md`. |
+| `mappings.yaml` | Single source of truth: rule → markets + FRED series + structured score/flag logic. |
+| `rules.py` | Rule engine: product/linear scorers, flags, shared panel builder. |
+| `signals.py` | Implied series from the bundle (front-expiry ladders, causal z, cached loader). |
+| `run_consistency.py` | One rule end-to-end: score, flags, CSV + plot. |
+| `validate_consistency.py` | Event study: does a flag predict re-alignment beyond a magnitude-matched control? `--grid` sweeps z-window × threshold. |
+| `backtest.py` | Toy costed backtest of the convergence trade; `--min-volume` marks-sensitivity. |
+| `oos_test.py` | **Out-of-sample gate**: frozen params, post-split events only, OOS controls + OOS backtest. |
+| `arbitrage_scan.py` | Model-free within-market checks: ladder monotonicity, YES/NO parity, persistence. |
+| `fed_path_check.py` | Same-event identity: Fed Decision (categorical) vs Fed Funds ladder at the same meeting. |
+| `discover_rules.py` | Pair mining: 6h-change correlations, Bonferroni screen, OOS confirmation, YAML stubs. |
 | `collect_fred.py` | Pull mapped macro series from FRED into `macro/fred.sqlite`. |
 | `check_readiness.py` | PASS/WARN/FAIL audit of both sources before inference. |
-| `explore_dataset.py` | Summary stats (JSON + per-market CSV) + figures. |
-| `signals.py` | Reusable: implied-prob series, band filter, 1h resample, z-score, mapping/FRED loaders. |
-| `run_consistency.py` | Run one consistency rule end-to-end (Phillips, Sahm). |
-| `validate_consistency.py` | Test whether a flag predicts re-alignment (mean reversion) vs baseline. |
-| `backtest.py` | Toy backtest of the fade-the-flag convergence trade, with costs. |
-| `mappings.yaml` | Single source of truth: rule -> markets + FRED series + flag logic. |
+| `explore_dataset.py` | Summary stats + figures for a bundle. |
 
-## Run a consistency check
+## Signal construction (methodology-critical)
 
-```bash
-cd analysis
-python3 run_consistency.py --rule phillips     # unemployment vs core CPI
-python3 run_consistency.py --rule sahm         # unemployment vs recession (low power)
-```
-Outputs land in `analysis/consistency/<rule>_consistency.{csv,png}`.
+1. Per market, YES contracts only, band-filter degenerate prices
+   (`prob_band`, default 0.001–0.999).
+2. **Per expiration** survival ladder; the signal tracks the **front expiry**
+   and rolls `roll_days` (default 2) before settlement. Pooling expiries —
+   the original implementation — mixed e.g. April-CPI and June-CPI contracts
+   into one fictitious distribution (42–66% of timestamps were mixed).
+3. Signal kinds: `median` (strike where the front ladder crosses P=0.5, in
+   underlying units) or `prob` (one reference contract chosen causally by
+   trailing-window activity — no full-window liquidity look-ahead).
+4. Duplicated `(conid, ts)` rows across `period_requested` (43% of the bundle,
+   4.9% disagreeing) are deduplicated preferring the finer `chart_step`.
+5. Resample to a common 1h grid with **bounded** forward-fill
+   (`ffill_limit=48` bars) so dead markets go NaN instead of flatlining.
+6. Causal trailing z-scores (`z_window`, default 48h); rule score per
+   mappings.yaml (`product` or `linear`); flag per the rule's metric.
 
-## Validate a signal (does a flag predict re-alignment?)
+Validation hardening: events = crossings of the rule's own flag metric,
+non-overlapping (`--min-gap` ≥ max horizon), block-bootstrap CIs, random
+baseline AND magnitude-matched baseline (equally-extreme non-event bars — the
+control that matters).
 
-```bash
-python3 validate_consistency.py --rule phillips
-python3 validate_consistency.py --rule sahm --z-window 72 --threshold 1.5
-```
-Gate question for the whole strategy: when a rule flags an inconsistency, do the
-markets subsequently CONVERGE more than baseline? Uses a **causal trailing
-z-score** (no look-ahead), event-study forward outcomes, and a random-entry
-baseline with bootstrap CIs. Outputs to `analysis/validation/`.
+## Current findings (Jul-07 2026 bundle, ~138d of history; IN-SAMPLE)
 
-**This is a necessary-condition test + opportunity sizing, NOT proof of profit**
-(no costs/execution/slippage modeled - that is a later backtest).
+Full table: `report/REPORT.md` (regenerate with `run_all.py --grid`).
 
-The validation is hardened (vs the first pass):
-- **Median signal** (full-window, no strike collapse) for ladder-rich markets;
-  thin markets (recession) fall back to the single-strike `prob` signal via the
-  rule's `signal:` key in mappings.yaml.
-- **Non-overlapping events** (`--min-gap`, default = max horizon) so forward
-  windows don't share bars -> events are ~independent.
-- **Block-bootstrap** CIs (robust to residual autocorrelation).
-- **Magnitude-matched baseline**: compares flagged entries against *equally
-  extreme* non-event bars. This is the real control - it asks whether entry
-  timing adds anything beyond "the score is large".
+**Static arbitrage (scanner).** Within-expiry ladder inversions occur at ~8%
+of adjacent-strike pairs across 229 markets; **3,593 persistent runs (≥2
+consecutive bars), 1,394 of them with volume on both legs** — the credible
+subset. YES/NO parity is tight (mean gap +0.4c; >5c in 0.02% of 922K pairs).
+So: small but real static mispricings exist; whether they are executable
+after spread/fees needs order-book data.
 
-### Current findings (exploratory, ~93-day window)
-- **Phillips: EDGE-SUGGESTIVE.** 25 independent events. %revert (~0.9) is similar
-  to equally-extreme bars, BUT reversion *magnitude* is ~2-3x larger (mean_rev
-  ~2-7 vs matched ~0.6-2.8): entering at the flag crossing captures more of the
-  reversion swing than entering at a random extreme moment. A real timing edge,
-  preliminarily.
-- **Sahm: INCONCLUSIVE.** Only 4 independent events after de-overlapping (its
-  earlier "edge" was an overlap artifact). Genuinely data-starved.
-- Still no costs/execution; short window; small N. Directional, not conclusive.
+**Consistency rules (10 implemented, 9 ran; okun's GDP leg too thin).**
+- Most robust: **payrolls_labor** — EDGE-SUGGESTIVE in every z≤48h grid cell
+  (12–17 events; 72h mean reversion ~2× the matched control; backtest
+  break-even ~5.5c/leg vs realistic 1–2c cost).
+- **core_headline** similar but slightly less stable (break-even ~3.7c/leg).
+- **sahm**, **taylor**: EDGE-SUGGESTIVE at the default cell, patchy across
+  the grid — parameter-sensitive, treat with suspicion.
+- phillips (the original headline result) is now **WEAK**: the earlier
+  EDGE-SUGGESTIVE verdict did not survive the expiry-mixing fix + more data.
+- uip, pce_cpi INCONCLUSIVE (too few events); beveridge, claims_labor WEAK.
 
-## Backtest (does the convergence actually make money?)
+**Out-of-sample gate (split 2026-05-01, ~68 OOS days).** The regression
+toward null that the caveats predicted happened: phillips, taylor, beveridge
+and claims_labor fall to WEAK; sahm/uip/pce_cpi have too few OOS events.
+payrolls_labor briefly looked like a survivor (OOS EDGE-SUGGESTIVE + positive
+OOS backtest) — see the artifact paragraph below for why that did not hold.
 
-```bash
-python3 backtest.py --rule phillips            # median signal, fade the flag
-python3 backtest.py --rule phillips --signal prob --cost 0.01
-```
-Signal = the validated causal score; execution = fade each leg on its ATM YES
-contract (`position = -sign(z_leg)`); enter one bar AFTER the signal; exit when
-`|score|` falls below an exit band or after max-hold; charge a round-trip cost
-per leg and sweep cost to find break-even. Outputs to `analysis/backtest/`.
+**Reference-switch artifact (the big catch, A11).** The tradeable `prob`
+series is stitched across reference-contract switches (expiry rolls,
+activity migration). Backtests holding through a switch booked the jump
+between two *different contracts* as PnL. Taylor leg-attribution exposed it:
+"policy-leg fades" earning +0.15–0.26/trade were entries at px≈0.97/0.05
+followed by ±0.9 stitched jumps (median PnL +0.02, win 56% — nothing).
+With forced exits before any reference switch (`reason="ref_roll"`),
+**payrolls_labor's break-even collapsed 5.5c → ~0.1c and its edge over
+random entry went to zero.** As of the Jul-07 bundle, NO rule has a
+positive costed edge under execution-integrity constraints. This mirrors
+the project's original conclusion: inconsistencies revert in z-space, but
+the reversion is not captureable on these contracts with this execution.
 
-### Current finding: NOT TRADEABLE (as built)
-This is the important, sobering result and the reason the backtest exists:
-- The score **does** converge (100% / ~89% of trades exit on convergence), so
-  step 2 was right that inconsistencies revert.
-- But the convergence is **tiny in actual contract-price terms**. Phillips: gross
-  PnL ~ +0.013 over 17 trades, **break-even round-trip cost ~ $0.0004/leg** -
-  any realistic spread wipes it out. With signal+execution on the same contract,
-  **gross is ~zero/negative even before costs** (mean -0.003/trade, t ~ 0).
-- Win rates are low (11-14%); the strategy does not beat random entry.
+**Permutation test (strictest null).** Circular-shift permutation
+(`--permute`) keeps each leg's own dynamics but destroys cross-leg
+alignment. payrolls_labor p ≈ 0.11 (leg mechanics explain most of it);
+taylor is the only rule with real cross-leg structure (p ≈ 0.003) — but that
+structure has no captureable PnL (see above). sahm's large reversion:
+p ≈ 0.53, pure mechanics.
 
-**Conclusion:** the inconsistency reverts in z-space, but that reversion does not
-translate into a profitable, costed trade on these contracts with this simple
-execution. The apparent step-2 edge does **not** survive a real backtest.
+**Effective-cost proxy (no order book available).** No public REST quote
+endpoint exists (probed; the bid/ask sample comes from the deferred
+websocket feed). Interim proxy: per-market |YES+NO−1| parity gaps — p75 ≈ 1c
+on every rule market. Break-evens now sit at ~0–1c, i.e. at or below the
+proxy cost floor.
 
-Caveats cut both ways: cost is a flat proxy (no bid/ask in the bundle), execution
-is a single ATM contract (not the whole ladder), exit is mark-to-market, and N is
-tiny. So this is "no evidence of a tradeable edge yet," not "proven impossible".
+**Same-event identity (fed_path).** Fed Decision vs the Fed Funds ladder
+price the same meeting within mean |gap| ~3–4c (staleness-inflated bars),
+tails to ~11c. Coherent overall; the persistent tails are the leads worth
+checking against live quotes.
 
-## Method (current slice)
+**Rule discovery (pair mining).** 115-market universe, 814 pairs with enough
+overlap, ZERO Bonferroni-significant co-movement pairs. Every strong raw
+correlation sits on a ~25-bar overlap — chance. No data-mined rules exist
+yet at this venue's liquidity; rerun as data accrues.
 
-1. For each market take the YES side, pick the single most-traded strike as a
-   stable reference, track its traded price = P(outcome > strike) over time.
-2. Drop degenerate values outside the `prob_band` (default 0.001-0.999).
-3. Resample each market to a common 1h grid (forward-fill) and align.
-4. Z-score each series over the window; combine per the rule's `logic.score`.
-5. Flag timestamps in the inconsistent region; write CSV + plot + summary.
+## Known limitations
 
-## Known limitations (to revisit before trusting results)
+- **The OOS window is one 68-day segment.** Next gate: evaluate only on data
+  collected after 2026-07-07 (the collector keeps running; parameters are
+  frozen in mappings.yaml).
+- `avg` bars are not executable quotes; no bid/ask exists in the bundle; the
+  cost model is a flat proxy.
+- 87% of bars have volume 0 (carried marks). Use `backtest.py --min-volume 1`
+  to gauge sensitivity.
+- Event counts are still 10–20 per rule; the power table in the report says
+  ~3–6 events/30d accrue per rule — several more months to reach ~40.
 
-- **Thin macro-event count.** ~93-day window = only a handful of real CPI / jobs
-  releases and few independent flag events (Phillips 25, Sahm 4), so power is
-  low. The single biggest improvement is simply MORE DATA - keep collecting.
-- **Sahm is data-starved.** Recession market is thin (prob signal only) and
-  gives too few independent events -> INCONCLUSIVE.
-- **No costs / execution / sizing.** Validation tests a necessary condition
-  (does the inconsistency revert beyond a matched control), not profit.
+The full improvement backlog (with what was already fixed) lives in
+[../docs/IMPROVEMENTS.md](../docs/IMPROVEMENTS.md).
 
-Fixed since the first pass: single-strike window collapse (now median signal),
-whole-window look-ahead z-score (now causal trailing z in run_consistency and
-validate), overlapping events + optimistic CIs (now min-gap + block-bootstrap +
-magnitude-matched baseline).
+## TODO (next research steps)
 
-## TODO
-
-- [ ] **C5 (b): move FRED collection to the VPS systemd timers** when the project
-      goes live, so `fred.sqlite` stays fresh without manual runs. For now it is
-      manual — run `collect_fred.py` before a backtest; `check_readiness.py`
-      flags staleness.
-- [x] Rolling implied-median signal (fixes single-strike window collapse).
-- [x] Causal trailing z-score in run_consistency.py and validate_consistency.py.
-- [x] Harden validation: min-gap (non-overlapping events) + block-bootstrap +
-      magnitude-matched baseline.
-- [x] Step 3: real backtest with costs, execution, sizing -> NOT TRADEABLE as
-      built (gross edge ~0, killed by costs). See Backtest section.
-- [ ] If pursuing further: trade the whole ladder / contract nearest the median
-      (not one ATM contract); model real bid/ask; revisit entry/exit rules.
-- [ ] More data: keep the collector running to grow the window / event count.
-- [ ] Implement remaining rules in `mappings.yaml` (taylor, okun, beveridge, uip).
+- [ ] **Websocket bid/ask capture (F3)** — now doubly decisive: it gives real
+      spreads AND per-contract executable quotes, removing both the cost
+      proxy and the stitched-series problem at once.
+- [ ] **Next OOS round**: at the next export, rerun
+      `oos_test.py --split 2026-07-07` (parameters frozen today). Under
+      execution-integrity constraints nothing currently survives; the OOS
+      round tests whether that stays true as data grows.
+- [ ] Trade construction that respects rolls by design: hold-to-settlement
+      of a single contract (PnL vs realized FRED outcome) instead of
+      mark-to-market fades — sidesteps reference switching entirely.
+- [ ] fed_path extensions (B9): Number of Fed Rate Cuts convolution;
+      non-front meetings. Regional-CPI aggregation rule (B10, needs BLS
+      weights).
+- [ ] Factor residuals (C2); rerun `discover_rules.py` as data accrues.
+- [ ] Move FRED collection to the VPS timers (F4).

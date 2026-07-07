@@ -35,6 +35,16 @@ def find_latest_zip() -> Path:
     return candidates[-1]
 
 
+# The two time-series tables are large (100s of MB); load only what the stats
+# and figures actually use. Applied as a header filter so schema differences
+# between export versions don't break the load.
+USECOLS = {
+    "projected_probabilities": {"underlying_conid", "probability", "collected_at"},
+    "contract_history": {"underlying_conid", "conid", "side", "strike",
+                         "strike_label", "ts_utc", "avg"},
+}
+
+
 def load_tables(zip_path: Path) -> dict[str, pd.DataFrame]:
     print(f"Loading {zip_path.name} ...")
     tables: dict[str, pd.DataFrame] = {}
@@ -43,8 +53,10 @@ def load_tables(zip_path: Path) -> dict[str, pd.DataFrame]:
             if not name.endswith(".csv"):
                 continue
             key = name.removesuffix(".csv")
+            wanted = USECOLS.get(key)
             with archive.open(name) as f:
-                tables[key] = pd.read_csv(f)
+                tables[key] = pd.read_csv(
+                    f, usecols=(lambda c, w=wanted: c in w) if wanted else None)
             print(f"  {name}: {len(tables[key]):,} rows")
     return tables
 

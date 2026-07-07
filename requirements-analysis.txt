@@ -1,0 +1,8 @@
+# Dependencies for the analysis/ research scripts (local, exploratory).
+# The collector's server-side deps live in requirements.txt.
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+pyyaml>=6.0,<7.0
+matplotlib>=3.8,<4.0
+requests>=2.31,<3.0
+scipy>=1.11,<2.0

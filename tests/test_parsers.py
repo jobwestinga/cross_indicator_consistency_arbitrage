@@ -4,6 +4,10 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("pydantic")  # collector dep; may be absent in analysis-only envs
+
 from forecast_collector.parsers import (
     parse_category_tree_response,
     parse_contract_details_response,

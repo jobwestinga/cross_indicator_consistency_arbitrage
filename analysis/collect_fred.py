@@ -47,6 +47,8 @@ SERIES: dict[str, tuple[str, str]] = {
     "DFF": ("Fed funds rate (daily)", "Taylor/Evans - daily policy rate"),
     "DEXJPUS": ("USD/JPY exchange rate", "UIP - US Dollar to Japanese Yen"),
     "USREC": ("US recession indicator (NBER)", "Sahm - US Recession"),
+    "LRUNTTTTCAM156S": ("Canada unemployment rate", "Okun (Canada) - Canada Unemployment"),
+    "NGDPRSAXDCCAQ": ("Canada real GDP", "Okun (Canada) - Canada Real GDP"),
 }
 
 
