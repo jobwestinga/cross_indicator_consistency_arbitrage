@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -111,7 +111,7 @@ def build_stats(tables: dict[str, pd.DataFrame], zip_path: Path) -> dict:
 
     return {
         "source_zip": zip_path.name,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "row_counts": {name: int(len(df)) for name, df in sorted(tables.items())},
         "markets": {
             "total": int(len(markets)),

@@ -22,7 +22,7 @@ import argparse
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import requests
@@ -108,7 +108,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 def store(conn: sqlite3.Connection, series_id: str, observations: list[dict]) -> int:
     label, mapping = SERIES.get(series_id, (series_id, ""))
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     rows = []
     for obs in observations:
         value = parse_value(obs.get("value", "."))

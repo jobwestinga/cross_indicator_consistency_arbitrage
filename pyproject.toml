@@ -42,3 +42,24 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["deploy"]
+
+[tool.ruff.lint]
+# Minimal, high-signal set (E12): real errors, unused code, import hygiene.
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+  "E731",  # lambda assignment: used deliberately in analysis one-liners
+  "B023",  # loop-variable closures are always bound immediately here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# analysis scripts import after sys.path shim, by design (E4 module level)
+"analysis/*.py" = ["E402"]
+# tests import after pytest.importorskip, by design
+"tests/*.py" = ["E402"]
+# typer's Option-in-default is the documented CLI idiom
+"src/forecast_collector/cli.py" = ["B008"]
+

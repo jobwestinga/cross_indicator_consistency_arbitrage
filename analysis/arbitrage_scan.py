@@ -27,7 +27,6 @@ Output (analysis/arbitrage/):
 """
 
 from __future__ import annotations
-from typing import Any
 
 import argparse
 import json
@@ -203,7 +202,7 @@ def main() -> None:
     n_persist = int(ok.n_persistent_runs.sum()) if len(ok) else 0
     n_persist_traded = int(ok.n_persistent_traded.sum()) if len(ok) else 0
 
-    print(f"\n=== static-arbitrage scan (EXPLORATORY) ===")
+    print("\n=== static-arbitrage scan (EXPLORATORY) ===")
     print(f"  markets scanned: {len(pm)}  (>= {args.min_rows} YES rows, >= 2 strikes)")
     print(f"  ladder inversions (within expiry): rate={agg_rate:.4f} across "
           f"{int(ok.n_pairs.sum()) if len(ok) else 0:,} adjacent-strike pairs")

@@ -168,17 +168,19 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   `analysis/report/REPORT.md`. The "does the whole thesis hold" button.
 - [x] **E9. Small cleanups.** Unused `align(freq=)` param, duplicated
   constants, dead branches, docstring drift.
-- [ ] **E10. CI test workflow.** GitHub Actions job running the analysis test
-  subset on push (deploy workflow already exists).
+- [x] **E10. CI test workflow.** `.github/workflows/tests.yml`: pytest + ruff
+  on push/PR (analysis deps only; collector tests skip as locally).
 - [x] **E11. README restructure.** Research goal + findings first; collector
   ops second; PDF moved to `docs/`.
-- [ ] **E12. Lint config.** Add ruff with a minimal rule set.
+- [x] **E12. Lint config.** ruff in pyproject.toml (E4/E7/E9, F, B, UP; repo
+  clean as of 2026-07-23) + a Lint step in the tests workflow.
 
 ## F. Data & infrastructure extensions
 
 - [x] **F1. Fresh export.** Bundle was Apr-30 (~70d of data); collector has
   been running through Jul-07 → new export roughly doubles the window and
-  provides the OOS segment for A9. (Pulled during this pass.)
+  provides the OOS segment for A9. (Pulled during this pass; Jul-23 bundle
+  pulled 2026-07-23 — ~137d window, findings re-run, conclusions unchanged.)
 - [ ] **F2. Scheduled export pulls.** Monthly (or CI-triggered) export+download
   so the local bundle never goes stale again.
 - [~] **F3. Bid/ask capture.** Investigated (2026-07-07): no public REST

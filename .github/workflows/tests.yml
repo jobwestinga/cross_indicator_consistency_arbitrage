@@ -18,6 +18,8 @@ jobs:
         # collector deps (psycopg, pydantic-settings, ...) are intentionally
         # not installed: their tests skip, matching the local dev setup.
         run: |
-          pip install -r requirements-analysis.txt pytest
+          pip install -r requirements-analysis.txt pytest ruff
+      - name: Lint
+        run: python3 -m ruff check analysis/ src/ tests/
       - name: Run test suite
         run: python3 -m pytest tests/ -q

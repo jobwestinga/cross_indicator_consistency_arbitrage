@@ -28,7 +28,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # runnable from anywhere
@@ -100,7 +100,7 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
     lines = [
         "# Cross-indicator consistency arbitrage — research report",
         "",
-        f"- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"- generated: {datetime.now(UTC).isoformat(timespec='seconds')}",
         f"- bundle: `{zip_path.name}`",
         f"- data readiness: {readiness}",
         "",

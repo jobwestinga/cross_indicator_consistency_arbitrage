@@ -84,7 +84,7 @@ class ContractRecord(BaseModel):
     last_history_collected_at: datetime | None = None
     last_history_no_data_at: datetime | None = None
 
-    def merge(self, other: "ContractRecord") -> "ContractRecord":
+    def merge(self, other: ContractRecord) -> ContractRecord:
         merged = self.model_dump()
         for key, value in other.model_dump().items():
             if value is not None:

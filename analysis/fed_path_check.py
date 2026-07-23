@@ -165,11 +165,11 @@ def main() -> None:
         dec = decision_probs(hist, markets)
         lad = ladder_survival(hist, markets)
     except KeyError as exc:
-        raise SystemExit(f"required market missing from bundle: {exc}")
+        raise SystemExit(f"required market missing from bundle: {exc}") from exc
     try:
         dff = load_dff()
     except ValueError as exc:
-        raise SystemExit(f"FRED DFF unavailable ({exc}); run collect_fred.py first")
+        raise SystemExit(f"FRED DFF unavailable ({exc}); run collect_fred.py first") from exc
 
     gaps = front_meeting_gaps(dec, lad, dff)
     if gaps.empty:

@@ -62,33 +62,34 @@ non-overlapping (`--min-gap` ≥ max horizon), block-bootstrap CIs, random
 baseline AND magnitude-matched baseline (equally-extreme non-event bars — the
 control that matters).
 
-## Current findings (Jul-07 2026 bundle, ~138d of history; IN-SAMPLE)
+## Current findings (Jul-23 2026 bundle, ~137d of history; IN-SAMPLE)
 
 Full table: `report/REPORT.md` (regenerate with `run_all.py --grid`).
 
-**Static arbitrage (scanner).** Within-expiry ladder inversions occur at ~8%
-of adjacent-strike pairs across 229 markets; **3,593 persistent runs (≥2
-consecutive bars), 1,394 of them with volume on both legs** — the credible
-subset. YES/NO parity is tight (mean gap +0.4c; >5c in 0.02% of 922K pairs).
-So: small but real static mispricings exist; whether they are executable
-after spread/fees needs order-book data.
+**Static arbitrage (scanner).** Within-expiry ladder inversions occur at ~8.7%
+of adjacent-strike pairs across 237 markets; **4,188 persistent runs (≥2
+consecutive bars), 1,685 of them with volume on both legs** — the credible
+subset, still growing roughly linearly with data. YES/NO parity is tight
+(mean gap +0.4c; >5c in 0.02% of 1.06M pairs). So: small but real static
+mispricings exist; whether they are executable after spread/fees needs
+order-book data.
 
-**Consistency rules (10 implemented, 9 ran; okun's GDP leg too thin).**
-- Most robust: **payrolls_labor** — EDGE-SUGGESTIVE in every z≤48h grid cell
-  (12–17 events; 72h mean reversion ~2× the matched control; backtest
-  break-even ~5.5c/leg vs realistic 1–2c cost).
-- **core_headline** similar but slightly less stable (break-even ~3.7c/leg).
-- **sahm**, **taylor**: EDGE-SUGGESTIVE at the default cell, patchy across
-  the grid — parameter-sensitive, treat with suspicion.
-- phillips (the original headline result) is now **WEAK**: the earlier
-  EDGE-SUGGESTIVE verdict did not survive the expiry-mixing fix + more data.
-- uip, pce_cpi INCONCLUSIVE (too few events); beveridge, claims_labor WEAK.
+**Consistency rules (11 implemented, 10 ran; okun's GDP leg too thin).**
+Under the ref-roll execution constraint (A11), z-space reversion and $
+capture now tell one consistent story:
+- **taylor** is the only rule with real cross-leg structure (perm p ≈ 0.01,
+  23 events) — and it still loses money per trade (break-even −0.1c/leg).
+- **payrolls_labor**, **core_headline**, **sahm** remain EDGE-SUGGESTIVE in
+  z-space but their permutation p ≈ 0.14–0.52 (leg mechanics) and
+  break-evens sit at 0–0.1c/leg, below the ~1c parity-gap cost proxy.
+- phillips, beveridge, claims_labor WEAK; uip, pce_cpi, okun_canada
+  INCONCLUSIVE (too few events).
+- **Every rule's mean net/trade is negative at a realistic 2c cost.**
 
-**Out-of-sample gate (split 2026-05-01, ~68 OOS days).** The regression
-toward null that the caveats predicted happened: phillips, taylor, beveridge
-and claims_labor fall to WEAK; sahm/uip/pce_cpi have too few OOS events.
-payrolls_labor briefly looked like a survivor (OOS EDGE-SUGGESTIVE + positive
-OOS backtest) — see the artifact paragraph below for why that did not hold.
+**Out-of-sample gates.** Split 2026-05-01 (~84 OOS days): verdict pattern
+holds, but NO rule's OOS break-even clears the ~1c proxy spread. Split
+2026-07-07 (frozen params, first 16 OOS days): 0–4 events per rule,
+INCONCLUSIVE everywhere — too early; rerun as the post-Jul-07 window grows.
 
 **Reference-switch artifact (the big catch, A11).** The tradeable `prob`
 series is stitched across reference-contract switches (expiry rolls,
@@ -98,17 +99,17 @@ between two *different contracts* as PnL. Taylor leg-attribution exposed it:
 followed by ±0.9 stitched jumps (median PnL +0.02, win 56% — nothing).
 With forced exits before any reference switch (`reason="ref_roll"`),
 **payrolls_labor's break-even collapsed 5.5c → ~0.1c and its edge over
-random entry went to zero.** As of the Jul-07 bundle, NO rule has a
+random entry went to zero.** As of the Jul-23 bundle, NO rule has a
 positive costed edge under execution-integrity constraints. This mirrors
 the project's original conclusion: inconsistencies revert in z-space, but
 the reversion is not captureable on these contracts with this execution.
 
 **Permutation test (strictest null).** Circular-shift permutation
 (`--permute`) keeps each leg's own dynamics but destroys cross-leg
-alignment. payrolls_labor p ≈ 0.11 (leg mechanics explain most of it);
-taylor is the only rule with real cross-leg structure (p ≈ 0.003) — but that
-structure has no captureable PnL (see above). sahm's large reversion:
-p ≈ 0.53, pure mechanics.
+alignment. payrolls_labor p ≈ 0.14 (leg mechanics explain most of it);
+taylor is the only rule with real cross-leg structure (p ≈ 0.01, stable
+across two bundles) — but that structure has no captureable PnL (see
+above). sahm's large reversion: p ≈ 0.52, pure mechanics.
 
 **Effective-cost proxy (no order book available).** No public REST quote
 endpoint exists (probed; the bid/ask sample comes from the deferred
@@ -117,26 +118,27 @@ on every rule market. Break-evens now sit at ~0–1c, i.e. at or below the
 proxy cost floor.
 
 **Same-event identity (fed_path).** Fed Decision vs the Fed Funds ladder
-price the same meeting within mean |gap| ~3–4c (staleness-inflated bars),
-tails to ~11c. Coherent overall; the persistent tails are the leads worth
-checking against live quotes.
+price the same meeting within mean |gap| ~2.7–3.7c across 3 meetings
+(staleness-inflated bars), tails to ~13c; the no-cut boundary sits >5c
+apart 28% of the time. Coherent overall; the persistent tails are the
+leads worth checking against live quotes.
 
-**Rule discovery (pair mining).** 115-market universe, 814 pairs with enough
+**Rule discovery (pair mining).** 123-market universe, 822 pairs with enough
 overlap, ZERO Bonferroni-significant co-movement pairs. Every strong raw
 correlation sits on a ~25-bar overlap — chance. No data-mined rules exist
 yet at this venue's liquidity; rerun as data accrues.
 
 ## Known limitations
 
-- **The OOS window is one 68-day segment.** Next gate: evaluate only on data
-  collected after 2026-07-07 (the collector keeps running; parameters are
-  frozen in mappings.yaml).
+- **The post-Jul-07 OOS window is only ~16 days** (first check 2026-07-23:
+  INCONCLUSIVE everywhere). Rerun `oos_test.py --split 2026-07-07` at each
+  new export; parameters stay frozen in mappings.yaml.
 - `avg` bars are not executable quotes; no bid/ask exists in the bundle; the
   cost model is a flat proxy.
 - 87% of bars have volume 0 (carried marks). Use `backtest.py --min-volume 1`
   to gauge sensitivity.
-- Event counts are still 10–20 per rule; the power table in the report says
-  ~3–6 events/30d accrue per rule — several more months to reach ~40.
+- Event counts are still 12–23 per rule; the power table in the report says
+  ~3–5 events/30d accrue per rule — ~3–8 more months to reach ~40.
 
 The full improvement backlog (with what was already fixed) lives in
 [../docs/IMPROVEMENTS.md](../docs/IMPROVEMENTS.md).
@@ -146,10 +148,11 @@ The full improvement backlog (with what was already fixed) lives in
 - [ ] **Websocket bid/ask capture (F3)** — now doubly decisive: it gives real
       spreads AND per-contract executable quotes, removing both the cost
       proxy and the stitched-series problem at once.
-- [ ] **Next OOS round**: at the next export, rerun
-      `oos_test.py --split 2026-07-07` (parameters frozen today). Under
-      execution-integrity constraints nothing currently survives; the OOS
-      round tests whether that stays true as data grows.
+- [ ] **Next OOS round**: rerun `oos_test.py --split 2026-07-07` at each new
+      export (first check 2026-07-23 on 16 OOS days: INCONCLUSIVE, all
+      net/trade negative). Under execution-integrity constraints nothing
+      currently survives; the OOS round tests whether that stays true as
+      data grows.
 - [ ] Trade construction that respects rolls by design: hold-to-settlement
       of a single contract (PnL vs realized FRED outcome) instead of
       mark-to-market fades — sidesteps reference switching entirely.

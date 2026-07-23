@@ -10,7 +10,8 @@ from decimal import Decimal
 from datetime import UTC, datetime, timedelta
 from io import TextIOBase
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
+from collections.abc import Iterator, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
@@ -32,7 +33,7 @@ class CollectorRepository:
         self.database_url = database_url
         self._conn: psycopg.Connection[Any] | None = None
 
-    def __enter__(self) -> "CollectorRepository":
+    def __enter__(self) -> CollectorRepository:
         self._conn = psycopg.connect(
             self.database_url,
             row_factory=dict_row,

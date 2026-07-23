@@ -67,7 +67,7 @@ class ForecastTraderClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "ForecastTraderClient":
+    def __enter__(self) -> ForecastTraderClient:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

@@ -20,14 +20,14 @@ import argparse
 import sqlite3
 import sys
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from pathlib import Path
 
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FRED_DB = Path(__file__).resolve().parent / "macro" / "fred.sqlite"
-TODAY = datetime.now(timezone.utc).date()
+TODAY = datetime.now(UTC).date()
 
 # Markets the strategy actually trades on (strats.txt). Used for cadence checks.
 KEY_MARKETS = [
@@ -79,7 +79,7 @@ def check_fred(rep: Report, db_path: Path, max_daily_stale: int) -> None:
         rep.line(FAIL, "table macro_observations empty")
         return
     rep.line(PASS, f"reachable: {len(rows)} series in {db_path.name}")
-    for sid, n, first, latest, nulls in rows:
+    for sid, n, first, latest, _nulls in rows:
         stale = (TODAY - date.fromisoformat(latest)).days
         if sid in FRED_DAILY:
             status = PASS if stale <= max_daily_stale + 4 else WARN

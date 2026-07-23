@@ -23,7 +23,7 @@ import sqlite3
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest
@@ -41,7 +41,7 @@ import signals as sig  # noqa: E402  (analysis/signals.py)
 
 N_HOURS = 240          # long enough for run_all's default z-window/horizons
 ROLL_HOURS = 120       # first expiry's front window ends here (expiry - roll_days)
-START = datetime(2026, 4, 1, 12, tzinfo=timezone.utc)
+START = datetime(2026, 4, 1, 12, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
@@ -227,7 +227,7 @@ def test_front_expiry_filter_rolls():
     })
     out = sig.front_expiry_filter(df, roll_days=2)
     # Apr 1: front = exp1; Apr 10: exp1 cutoff (Apr 10) passed -> exp2; Apr 20: exp2
-    kept = set(zip(out["ts_utc"].dt.day, out["expiration"].dt.month))
+    kept = set(zip(out["ts_utc"].dt.day, out["expiration"].dt.month, strict=True))
     assert kept == {(1, 4), (10, 5), (20, 5)}
 
 
