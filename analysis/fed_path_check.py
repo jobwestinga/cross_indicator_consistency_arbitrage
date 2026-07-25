@@ -94,8 +94,14 @@ def load_dff() -> pd.Series:
     return dff.resample(FREQ).last().ffill()
 
 
-def front_meeting_gaps(dec: dict, lad: dict, dff: pd.Series) -> pd.DataFrame:
-    """Stitch per-meeting gaps into one front-meeting time series."""
+def front_meeting_gaps(dec: dict, lad: dict, dff: pd.Series,
+                       all_meetings: bool = False) -> pd.DataFrame:
+    """Per-meeting identity gaps as one time series.
+
+    Default: only each meeting's FRONT window (previous meeting -> meeting),
+    where both markets are most active. all_meetings=True keeps every bar of
+    every meeting's life and marks the front window in `is_front`, so the
+    same identity can be read on back meetings (thinner, staler prints)."""
     meetings = sorted(set(dec) & set(lad))
     rows = []
     for i, exp in enumerate(meetings):
@@ -103,7 +109,11 @@ def front_meeting_gaps(dec: dict, lad: dict, dff: pd.Series) -> pd.DataFrame:
         idx = d.index.intersection(s.index)
         # front window: from the previous meeting (or start) to this meeting
         lo = meetings[i - 1] if i else idx.min()
-        idx = idx[(idx >= lo) & (idx < exp)]
+        front_lo = lo
+        if all_meetings:
+            idx = idx[idx < exp]
+        else:
+            idx = idx[(idx >= lo) & (idx < exp)]
         if idx.empty:
             continue
         r = dff.reindex(idx).ffill()
@@ -125,6 +135,7 @@ def front_meeting_gaps(dec: dict, lad: dict, dff: pd.Series) -> pd.DataFrame:
             k_cut = nearest(r_mid - 0.25)   # no-cut boundary
             k_hike = nearest(r_mid)         # hike boundary
             rec = {"ts_utc": ts, "meeting": exp, "r_eff": r_eff, "r_mid": r_mid,
+                   "is_front": bool(ts >= front_lo),
                    "p_cut": d.loc[ts, "p_cut"], "p_hike": d.loc[ts, "p_hike"],
                    "cat_sum": d.loc[ts, "cat_sum"]}
             if k_cut is not None:
@@ -151,6 +162,98 @@ def _gap_stats(g: pd.Series) -> dict:
             "max_abs": float(g.abs().max())}
 
 
+# --------------------------------------------------------------------------- #
+# B9 extension: Number of Fed Rate Cuts vs the terminal Fed Funds ladder
+# --------------------------------------------------------------------------- #
+CUTS_MARKET = "Number of Fed Rate Cuts"
+
+
+def cuts_bound_check(hist: pd.DataFrame, markets: pd.DataFrame,
+                     lad: dict, dff: pd.Series) -> tuple[pd.DataFrame, dict]:
+    """One-sided identity: a NET decline of k*25bp by the cuts market's
+    terminal meeting requires at least k GROSS cuts during the year, so
+
+        P(rate_terminal <= r_start - 0.25k)  <=  P(cuts >= k)
+
+    Left side from the Fed Funds ladder at the same expiration
+    (= 1 - S(r_start - 0.25k), strikes sit on range midpoints); right side
+    from the cuts market ('exactly j' categoricals summed over j >= k).
+    bound_gap_k = LHS - RHS; positive beyond fees = the pair prices an
+    impossible combination. Model-free, no distributional assumption.
+    """
+    try:
+        conid = sig.resolve_conid(markets, CUTS_MARKET)
+    except KeyError:
+        return pd.DataFrame(), {}
+    sub = hist[(hist.underlying_conid == conid)
+               & (hist.side == "Y")].dropna(subset=["strike"])
+    if sub.empty:
+        return pd.DataFrame(), {}
+    exp = sub["expiration"].dropna().max()
+    if exp not in lad:
+        return pd.DataFrame(), {}
+
+    pv = sub.pivot_table(index="ts_utc", columns="strike", values="avg", aggfunc="last")
+    # the year-count market prints each category only every few days; a 48h
+    # carry never sees all categories at once. Carry up to 7d here (slow-moving
+    # annual count; the coherence gate below drops genuinely stale garbage).
+    pv = pd.DataFrame({k: pv[k] for k in pv.columns}).resample(FREQ).last().ffill(limit=168)
+    strikes = sorted(pv.columns)
+    # P(cuts >= k) = sum of the 'exactly j' categories with j >= k. Every
+    # category in the tail must be present at that bar (min_count), otherwise
+    # a missing category silently deflates the sum and fakes violations.
+    cum_ge = pd.DataFrame({
+        k: pv[[c for c in strikes if c >= k]].sum(axis=1,
+                                                  min_count=len([c for c in strikes
+                                                                 if c >= k]))
+        for k in strikes})
+    # bars whose carried categories are internally incoherent (sum of the
+    # 'exactly j' prices > 1; there is no 0-cuts contract, so the sum must be
+    # <= 1) prove staleness, not probability - drop them from the bound test.
+    full_sum = pv[strikes].sum(axis=1, min_count=len(strikes))
+    n_complete = int(full_sum.notna().sum())
+    cum_ge = cum_ge[full_sum <= 1.02]
+    coherence = {"n_complete_bars": n_complete,
+                 "n_coherent_bars": int(len(cum_ge)),
+                 "median_category_sum": float(full_sum.median())
+                 if n_complete else None}
+
+    s = lad[exp]
+    ladder_strikes = np.array(s.columns, dtype=float)
+    year = exp.year
+    r0 = dff[dff.index >= pd.Timestamp(f"{year}-01-01", tz="UTC")]
+    if r0.empty:
+        return pd.DataFrame(), {}
+    r_start = round((float(r0.iloc[0]) - 0.125) / 0.25) * 0.25 + 0.125
+
+    idx = cum_ge.index.intersection(s.index)
+    rows = []
+    for k in (int(k) for k in strikes):
+        target = r_start - 0.25 * k
+        j = np.abs(ladder_strikes - target).argmin() if len(ladder_strikes) else None
+        if j is None or abs(ladder_strikes[j] - target) > 0.06:
+            continue
+        k_strike = ladder_strikes[j]
+        lhs = 1.0 - s.loc[idx, k_strike]
+        rhs = cum_ge.loc[idx, float(k)] if float(k) in cum_ge.columns else np.nan
+        gap = lhs - rhs
+        g = gap.dropna()
+        if g.empty:
+            continue
+        rows.append({"k": k, "ladder_strike": float(k_strike), "n": int(len(g)),
+                     "mean_gap": float(g.mean()),
+                     "frac_gt_2c": float((g > 0.02).mean()),
+                     "frac_gt_5c": float((g > 0.05).mean()),
+                     "max_gap": float(g.max())})
+    df = pd.DataFrame(rows)
+    stats = {"terminal_meeting": str(exp.date()), "r_start": r_start,
+             "n_bounds": int(len(df)),
+             "worst_frac_gt_2c": float(df["frac_gt_2c"].max()) if len(df) else None,
+             "worst_max_gap": float(df["max_gap"].max()) if len(df) else None,
+             **coherence}
+    return df, stats
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fed Decision vs Fed Funds ladder identity check.")
     ap.add_argument("--zip", type=Path, default=None)
@@ -171,22 +274,45 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"FRED DFF unavailable ({exc}); run collect_fred.py first") from exc
 
-    gaps = front_meeting_gaps(dec, lad, dff)
+    gaps = front_meeting_gaps(dec, lad, dff, all_meetings=True)
     if gaps.empty:
         raise SystemExit("no overlapping decision/ladder meetings found")
+    front = gaps[gaps["is_front"]]
+    back = gaps[~gaps["is_front"]]
 
     OUT_DIR.mkdir(exist_ok=True)
     gaps.to_csv(OUT_DIR / "front_meeting_gaps.csv")
 
-    cut_stats = _gap_stats(gaps.get("gap_cut", pd.Series(dtype=float)))
-    hike_stats = _gap_stats(gaps.get("gap_hike", pd.Series(dtype=float)))
-    parity = _gap_stats(gaps["cat_sum"] - 1.0)
+    cut_stats = _gap_stats(front.get("gap_cut", pd.Series(dtype=float)))
+    hike_stats = _gap_stats(front.get("gap_hike", pd.Series(dtype=float)))
+    back_cut = _gap_stats(back.get("gap_cut", pd.Series(dtype=float)))
+    back_hike = _gap_stats(back.get("gap_hike", pd.Series(dtype=float)))
+    parity = _gap_stats(front["cat_sum"] - 1.0)
+    cuts_df, cuts_stats = cuts_bound_check(hist, markets, lad, dff)
 
     print("\n=== fed_path identity check (EXPLORATORY) ===")
-    print(f"  meetings covered: {gaps['meeting'].nunique()}   grid points: {len(gaps):,}")
-    print(f"  gap_cut  (ladder no-cut  vs decision): {cut_stats}")
-    print(f"  gap_hike (ladder hike    vs decision): {hike_stats}")
-    print(f"  decision category-sum minus 1        : {parity}")
+    print(f"  meetings covered: {gaps['meeting'].nunique()}   grid points: "
+          f"{len(gaps):,} (front {len(front):,} / back {len(back):,})")
+    print(f"  gap_cut  (ladder no-cut  vs decision, front): {cut_stats}")
+    print(f"  gap_hike (ladder hike    vs decision, front): {hike_stats}")
+    print(f"  gap_cut  (back meetings)                    : {back_cut}")
+    print(f"  gap_hike (back meetings)                    : {back_hike}")
+    print(f"  decision category-sum minus 1 (front)       : {parity}")
+    if not cuts_df.empty:
+        print(f"\n  cuts-count bound (terminal meeting {cuts_stats['terminal_meeting']}, "
+              f"r_start {cuts_stats['r_start']}):")
+        print("  P(net decline >= k) from the ladder must be <= P(cuts >= k); "
+              "positive gap = impossible pricing")
+        print(cuts_df.to_string(index=False))
+        cuts_df.to_csv(OUT_DIR / "cuts_bound_gaps.csv", index=False)
+    elif cuts_stats:
+        print(f"\n  cuts-count bound: NOT TESTABLE on this bundle - "
+              f"{cuts_stats.get('n_complete_bars', 0)} bars have all categories "
+              f"within a 7d carry and their median price sum is "
+              f"{cuts_stats.get('median_category_sum')} (must be <= 1). The tail "
+              "categories are never-traded marks; rerun when the market trades.")
+    else:
+        print("  cuts-count bound: cuts market/ladder overlap unavailable")
     print("  CAVEATS: bar averages carried up to 48h (both markets print sparsely),")
     print("  NOT simultaneous quotes -> gaps are staleness-inflated. r_eff anchor from")
     print("  daily FRED DFF snapped to the midpoint grid; assumes 25bp moves. The")
@@ -197,10 +323,10 @@ def main() -> None:
     try:
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(12, 5))
-        if "gap_cut" in gaps:
-            ax.plot(gaps.index, gaps["gap_cut"], label="gap_cut", linewidth=0.9)
-        if "gap_hike" in gaps:
-            ax.plot(gaps.index, gaps["gap_hike"], label="gap_hike", linewidth=0.9)
+        if "gap_cut" in front:
+            ax.plot(front.index, front["gap_cut"], label="gap_cut (front)", linewidth=0.9)
+        if "gap_hike" in front:
+            ax.plot(front.index, front["gap_hike"], label="gap_hike (front)", linewidth=0.9)
         ax.axhline(0, color="black", linewidth=0.6)
         for m in gaps["meeting"].unique():
             ax.axvline(m, color="gray", linewidth=0.5, linestyle=":")
@@ -219,9 +345,13 @@ def main() -> None:
     (OUT_DIR / "summary.json").write_text(json.dumps({
         "bundle": zip_path.name,
         "meetings": int(gaps["meeting"].nunique()),
-        "n_points": int(len(gaps)),
+        "n_points": int(len(front)),
+        "n_points_back": int(len(back)),
         "gap_cut": cut_stats, "gap_hike": hike_stats,
+        "back_gap_cut": back_cut, "back_gap_hike": back_hike,
         "category_parity": parity,
+        "cuts_bound": {**cuts_stats, "per_k": cuts_df.to_dict("records")}
+                      if cuts_stats else {},
     }, indent=2, default=str))
     print(f"  wrote {OUT_DIR}/front_meeting_gaps.csv + summary.json")
 

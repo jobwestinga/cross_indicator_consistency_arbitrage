@@ -290,6 +290,86 @@ def implied_series(
 
 
 # --------------------------------------------------------------------------- #
+# implied-series disk cache [F5]
+# --------------------------------------------------------------------------- #
+SIGNALS_CACHE_VERSION = "sig-v1"   # bump whenever signal construction changes
+
+
+def _sig_cache_path(zip_path: Path, market_name: str, what: str, kind: str,
+                    band, freq, ffill_limit, roll_days, min_volume) -> Path:
+    import hashlib
+    key = f"{market_name}|{what}|{kind}|{band}|{freq}|{ffill_limit}|{roll_days}|{min_volume}"
+    digest = hashlib.md5(key.encode()).hexdigest()[:12]
+    return (CACHE_DIR / f"{zip_path.stem}-{int(zip_path.stat().st_mtime)}"
+                        f"-{SIGNALS_CACHE_VERSION}-{digest}.pkl")
+
+
+def cached_implied_series(
+    zip_path: Path | None,
+    history: pd.DataFrame,
+    markets: pd.DataFrame,
+    market_name: str,
+    kind: str = "median",
+    band: tuple[float, float] = DEFAULT_BAND,
+    freq: str = DEFAULT_FREQ,
+    ffill_limit: int = DEFAULT_FFILL_LIMIT,
+    roll_days: int = DEFAULT_ROLL_DAYS,
+    min_volume: int = 0,
+) -> pd.Series:
+    """implied_series with a per-bundle disk cache [F5].
+
+    Every pipeline script recomputes the same implied series from the same
+    bundle (run_all spawns one process per step); this memoizes them on disk,
+    keyed by bundle name+mtime and every construction parameter. Only
+    repo-root bundles are cached (same rule as the history cache); pass
+    zip_path=None to bypass. `history` must be the UNFILTERED load_history
+    result for that bundle.
+    """
+    use = zip_path is not None and Path(zip_path).resolve().parent == REPO_ROOT
+    cache = None
+    if use:
+        cache = _sig_cache_path(Path(zip_path), market_name, "series", kind,
+                                band, freq, ffill_limit, roll_days, min_volume)
+        if cache.exists():
+            return pd.read_pickle(cache)
+    s = implied_series(history, markets, market_name, kind=kind, band=band,
+                       freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
+                       min_volume=min_volume)
+    if cache is not None:
+        CACHE_DIR.mkdir(exist_ok=True)
+        s.to_pickle(cache)
+    return s
+
+
+def cached_implied_prob_frame(
+    zip_path: Path | None,
+    history: pd.DataFrame,
+    markets: pd.DataFrame,
+    market_name: str,
+    band: tuple[float, float] = DEFAULT_BAND,
+    freq: str = DEFAULT_FREQ,
+    ffill_limit: int = DEFAULT_FFILL_LIMIT,
+    roll_days: int = DEFAULT_ROLL_DAYS,
+    min_volume: int = 0,
+) -> pd.DataFrame:
+    """implied_prob_frame with the same per-bundle disk cache [F5]."""
+    use = zip_path is not None and Path(zip_path).resolve().parent == REPO_ROOT
+    cache = None
+    if use:
+        cache = _sig_cache_path(Path(zip_path), market_name, "frame", "prob",
+                                band, freq, ffill_limit, roll_days, min_volume)
+        if cache.exists():
+            return pd.read_pickle(cache)
+    f = implied_prob_frame(history, markets, market_name, band=band, freq=freq,
+                           ffill_limit=ffill_limit, roll_days=roll_days,
+                           min_volume=min_volume)
+    if cache is not None:
+        CACHE_DIR.mkdir(exist_ok=True)
+        f.to_pickle(cache)
+    return f
+
+
+# --------------------------------------------------------------------------- #
 # alignment + scoring helpers
 # --------------------------------------------------------------------------- #
 def align(*series: pd.Series) -> pd.DataFrame:

@@ -31,7 +31,11 @@ outage Jun 4–12 2026) and is empty for some markets.
 | `run_consistency.py` | One rule end-to-end: score, flags, CSV + plot. |
 | `validate_consistency.py` | Event study: does a flag predict re-alignment beyond a magnitude-matched control? `--grid` sweeps z-window × threshold. |
 | `backtest.py` | Toy costed backtest of the convergence trade; `--min-volume` marks-sensitivity. |
+| `settlement_test.py` | **Hold-to-settlement construction**: buy the front contract on a flag, hold to resolution (FRED-mapped or price-pinned outcome). No rolls, no mark exit. |
 | `oos_test.py` | **Out-of-sample gate**: frozen params, post-split events only, OOS controls + OOS backtest. |
+| `factor_residuals.py` | C2: PCA macro factor on the implied panel; do deviations from the factor revert (train-frozen loadings, hard split)? |
+| `regional_cpi_check.py` | B10: national CPI yoy vs BLS-weighted census-region CPI markets (levels → yoy via FRED bases). Accounting identity. |
+| `release_event_study.py` | D4: does \|score\| compress at macro releases (leg-market expiration days) vs random times? Mechanism evidence. |
 | `arbitrage_scan.py` | Model-free within-market checks: ladder monotonicity, YES/NO parity, persistence. |
 | `fed_path_check.py` | Same-event identity: Fed Decision (categorical) vs Fed Funds ladder at the same meeting. |
 | `discover_rules.py` | Pair mining: 6h-change correlations, Bonferroni screen, OOS confirmation, YAML stubs. |
@@ -104,6 +108,16 @@ positive costed edge under execution-integrity constraints. This mirrors
 the project's original conclusion: inconsistencies revert in z-space, but
 the reversion is not captureable on these contracts with this execution.
 
+**Hold-to-settlement construction (new 2026-07-23).** The construction that
+sidesteps reference switching by design: on a flag, hold each leg's front
+contract to resolution. Outcomes come from a FRED settlement mapping
+(mappings.yaml `settlement:` blocks — NSA CPI basis, venue-consistent
+reference months) with price-pin/ladder-inference fallback and a FRED-vs-pin
+disagreement guard (caught the SA-vs-NSA CPI trap and JOLTS initial-print
+revisions during development). First pass: 5–20 settled trades per rule,
+mixed signs, |t| ≤ 2.3 — no edge evidence either, but this instrument's N
+grows automatically as expiries resolve.
+
 **Permutation test (strictest null).** Circular-shift permutation
 (`--permute`) keeps each leg's own dynamics but destroys cross-leg
 alignment. payrolls_labor p ≈ 0.14 (leg mechanics explain most of it);
@@ -127,6 +141,20 @@ leads worth checking against live quotes.
 overlap, ZERO Bonferroni-significant co-movement pairs. Every strong raw
 correlation sits on a ~25-bar overlap — chance. No data-mined rules exist
 yet at this venue's liquidity; rerun as data accrues.
+
+**Regional CPI aggregation (B10, new 2026-07-25).** National CPI yoy vs the
+BLS-weighted census-region markets (which price NSA index LEVELS — converted
+to implied yoy via FRED regional bases). Mean gap +0.32pp is a constant
+(weights/base approximation); demeaned deviations sit within strike
+granularity with ZERO persistent 24h+ runs → the venue prices the
+aggregation identity **coherently**.
+
+**Release-time behavior (D4, new 2026-07-25).** Do inconsistencies close AT
+macro releases (leg-market expiration days) rather than at random times?
+Pooled post/pre |score| ratio 0.99; NO rule shows release-specific
+compression. Inconsistencies decay on their own clock — mechanism evidence
+AGAINST "the data release resolves a real mispricing" and FOR
+signal-construction noise. Consistent with the ref-roll backtest result.
 
 ## Known limitations
 
@@ -153,11 +181,23 @@ The full improvement backlog (with what was already fixed) lives in
       net/trade negative). Under execution-integrity constraints nothing
       currently survives; the OOS round tests whether that stays true as
       data grows.
-- [ ] Trade construction that respects rolls by design: hold-to-settlement
-      of a single contract (PnL vs realized FRED outcome) instead of
-      mark-to-market fades — sidesteps reference switching entirely.
-- [ ] fed_path extensions (B9): Number of Fed Rate Cuts convolution;
-      non-front meetings. Regional-CPI aggregation rule (B10, needs BLS
-      weights).
-- [ ] Factor residuals (C2); rerun `discover_rules.py` as data accrues.
-- [ ] Move FRED collection to the VPS timers (F4).
+- [x] Trade construction that respects rolls by design →
+      `settlement_test.py` (2026-07-23): hold the front contract to
+      resolution, outcome from a FRED settlement mapping (mappings.yaml
+      `settlement:` blocks) with price-pin/ladder fallback and a
+      FRED-vs-pin disagreement guard. First pass: mixed signs, |t| <= 2.3,
+      no edge; N grows as expiries resolve.
+- [x] fed_path extensions (B9, 2026-07-23): non-front meetings measured
+      (~2x wider gaps, staleness); cuts-count bound implemented but NOT
+      TESTABLE yet (cuts market tail categories are never-traded marks).
+- [x] Regional-CPI aggregation (B10, 2026-07-25): `regional_cpi_check.py` —
+      venue prices the identity coherently (no persistent violations).
+- [x] Release-time event study (D4, 2026-07-25): `release_event_study.py` —
+      no release-specific compression; inconsistencies decay on their own
+      clock (mechanism evidence against tradeable mispricing).
+- [x] Factor residuals (C2, 2026-07-23): `factor_residuals.py` — factor
+      explains ~3% of change variance; deviations revert but not beyond
+      matched control (WEAK). Runs inside run_all; discover_rules reruns
+      there too.
+- [x] FRED collection: superseded by `scripts/refresh_data.sh` (F2) — FRED
+      refreshes on every data pull.

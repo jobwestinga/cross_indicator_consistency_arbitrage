@@ -34,8 +34,14 @@ FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # FRED series id -> (human label, ForecastTrader rule/market it feeds).
 SERIES: dict[str, tuple[str, str]] = {
-    "CPIAUCSL": ("CPI (headline)", "Taylor/Phillips - US CPI Yearly"),
-    "CPILFESL": ("Core CPI", "Phillips - US Core CPI"),
+    "CPIAUCSL": ("CPI (headline, SA)", "Taylor/Phillips - US CPI Yearly"),
+    "CPIAUCNS": ("CPI (headline, NSA)", "settlement - venue settles on NSA 12-mo change"),
+    "CPILFESL": ("Core CPI (SA)", "Phillips - US Core CPI"),
+    "CPILFENS": ("Core CPI (NSA)", "settlement - venue settles on NSA 12-mo change"),
+    "CUUR0100SA0": ("CPI Northeast (NSA)", "B10 - Northeastern US CPI yoy base"),
+    "CUUR0200SA0": ("CPI Midwest (NSA)", "B10 - Midwestern US CPI yoy base"),
+    "CUUR0300SA0": ("CPI South (NSA)", "B10 - Southern US CPI yoy base"),
+    "CUUR0400SA0": ("CPI West (NSA)", "B10 - Western US CPI yoy base"),
     "PCEPI": ("PCE price index", "Taylor - PCE"),
     "PCEPILFE": ("Core PCE", "Taylor - US Core PCE"),
     "UNRATE": ("Unemployment rate", "Phillips/Okun/Sahm/Beveridge - US Unemployment"),

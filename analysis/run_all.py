@@ -45,7 +45,26 @@ ARB_DIR = OUT_BASE / "arbitrage"
 OOS_DIR = OUT_BASE / "oos"
 FED_DIR = OUT_BASE / "fed_path"
 DISC_DIR = OUT_BASE / "discovery"
+SETTLE_DIR = OUT_BASE / "settlement"
+FACTOR_DIR = OUT_BASE / "factor"
+REGIONAL_DIR = OUT_BASE / "regional_cpi"
+RELEASE_DIR = OUT_BASE / "releases"
 DEFAULT_OOS_SPLIT = "2026-05-01"
+
+
+def _bh_qvalues(pvals: dict[str, float]) -> dict[str, float]:
+    """Benjamini-Hochberg adjusted q-values across the tested rules [A8]."""
+    items = [(k, p) for k, p in pvals.items() if p == p]
+    if not items:
+        return {}
+    items.sort(key=lambda kv: kv[1])
+    m = len(items)
+    q: dict[str, float] = {}
+    prev = 1.0
+    for rank, (k, p) in reversed(list(enumerate(items, start=1))):
+        prev = min(prev, p * m / rank)
+        q[k] = prev
+    return q
 
 
 def _run(script: str, *args: str) -> tuple[int, str]:
@@ -134,14 +153,22 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         lines.append("_scan did not produce output_")
     lines += ["", "## 2. Consistency rules (cross-market economic identities)", ""]
 
+    perm_ps = {}
+    for rule_key, status in rule_status.items():
+        if status == "ok":
+            v = _load_json(VALIDATION_DIR / f"{rule_key}_validation.json")
+            perm_ps[rule_key] = ((v or {}).get("permutation") or {}).get(
+                "p_value", float("nan")) or float("nan")
+    qvals = _bh_qvalues(perm_ps)
+
     header = ("| rule | status | events | validation verdict | %rev@24h | mean_rev vs matched | "
-              "perm p* | trades | mean net/trade | break-even cost/leg |")
-    lines += [header, "|" + "---|" * 10]
+              "perm p* | BH q | trades | mean net/trade | break-even cost/leg |")
+    lines += [header, "|" + "---|" * 11]
     for rule_key, status in rule_status.items():
         v = _load_json(VALIDATION_DIR / f"{rule_key}_validation.json")
         b = _load_json(BACKTEST_DIR / f"{rule_key}_backtest.json")
         if status != "ok":
-            lines.append(f"| {rule_key} | FAILED: {status[:60]} | - | - | - | - | - | - | - | - |")
+            lines.append(f"| {rule_key} | FAILED: {status[:60]} | - | - | - | - | - | - | - | - | - |")
             continue
         v24 = (v or {}).get("verdicts", {}).get("24", {})
         mean_rev = _fmt(v24.get("mean_rev"), ".2f")
@@ -153,6 +180,7 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
             f"| {_fmt(v24.get('pct_revert'), '.2f')} "
             f"| {mean_rev} vs {matched} "
             f"| {perm_p} "
+            f"| {_fmt(qvals.get(rule_key), '.3f')} "
             f"| {(b or {}).get('n_trades', '-')} "
             f"| {_fmt((b or {}).get('mean_net_per_trade'), '+.4f')} "
             f"| {_fmt((b or {}).get('breakeven_cost_per_leg'), '+.4f')} |")
@@ -162,8 +190,38 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         "control AND the backtest break-even cost/leg exceeds a realistic spread",
         "(ForecastTrader all-in round trip is realistically >= $0.01-0.02/leg).",
         "*perm p = circular-shift permutation test (each leg's own dynamics kept,",
-        "cross-leg alignment destroyed); the strictest null available here.",
+        "cross-leg alignment destroyed); the strictest null available here. BH q =",
+        "Benjamini-Hochberg adjusted across the rules tested (A8): the multiple-",
+        "testing-honest version of perm p.",
         "",
+        "### 2b. Hold-to-settlement construction (no rolls, no marks at exit)",
+        "",
+    ]
+    settle = _load_json(SETTLE_DIR / "summary.json")
+    if settle:
+        lines += ["| rule | flags | settled | net/trade | win | baseline net | edge |",
+                  "|" + "---|" * 7]
+        for r in settle.get("results", []):
+            if "failed" in r:
+                continue
+            mn = r.get("mean_net_per_trade")
+            base = r.get("baseline_mean_net")
+            edge = (mn - base) if mn is not None and base is not None else None
+            lines.append(
+                f"| {r['rule']} | {r.get('n_flags', '-')} | {r.get('n_settled', '-')} "
+                f"| {_fmt(mn, '+.4f')} | {_fmt(r.get('win_rate'), '.2f')} "
+                f"| {_fmt(base, '+.4f')} | {_fmt(edge, '+.4f')} |")
+        lines += [
+            "",
+            "Entry at the flag, hold the actual front contract to settlement",
+            "(FRED-mapped or price-pinned outcome; one-way entry cost). Sidesteps",
+            "the reference-switch problem by construction; capital locked to expiry;",
+            "small N until more expiries resolve.",
+            "",
+        ]
+    else:
+        lines.append("_no settlement results (run settlement_test.py)_")
+    lines += ["",
         "## 3. Out-of-sample gate (frozen parameters, post-split events only)",
         "",
     ]
@@ -212,22 +270,69 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
     fed = _load_json(FED_DIR / "summary.json")
     if fed:
         gc, gh = fed.get("gap_cut", {}), fed.get("gap_hike", {})
+        bgc, bgh = fed.get("back_gap_cut", {}), fed.get("back_gap_hike", {})
         lines += [
-            f"- meetings covered: {fed.get('meetings')} · grid points: {fed.get('n_points'):,}",
-            f"- no-cut boundary gap: mean {_fmt(gc.get('mean'), '+.4f')}, "
+            f"- meetings covered: {fed.get('meetings')} · front grid points: "
+            f"{fed.get('n_points'):,} · back: {fed.get('n_points_back', 0):,}",
+            f"- no-cut boundary gap (front): mean {_fmt(gc.get('mean'), '+.4f')}, "
             f"mean|gap| {_fmt(gc.get('mean_abs'), '.4f')}, "
             f">5c {_fmt(100 * gc.get('frac_abs_gt_5c', float('nan')), '.1f')}% , "
             f"max {_fmt(gc.get('max_abs'), '.3f')}",
-            f"- hike boundary gap: mean {_fmt(gh.get('mean'), '+.4f')}, "
+            f"- hike boundary gap (front): mean {_fmt(gh.get('mean'), '+.4f')}, "
             f"mean|gap| {_fmt(gh.get('mean_abs'), '.4f')}, "
             f">5c {_fmt(100 * gh.get('frac_abs_gt_5c', float('nan')), '.1f')}%, "
             f"max {_fmt(gh.get('max_abs'), '.3f')}",
+            f"- back meetings: no-cut mean|gap| {_fmt(bgc.get('mean_abs'), '.4f')}, "
+            f"hike mean|gap| {_fmt(bgh.get('mean_abs'), '.4f')} "
+            f"(thinner prints, wider and staler than front)",
+        ]
+        cuts = fed.get("cuts_bound") or {}
+        if cuts.get("n_bounds"):
+            lines.append(
+                f"- cuts-count bound (terminal {cuts.get('terminal_meeting')}): "
+                f"{cuts['n_bounds']} testable k-levels, worst max gap "
+                f"{_fmt(cuts.get('worst_max_gap'), '.3f')}")
+        elif cuts:
+            lines.append(
+                "- cuts-count bound: NOT TESTABLE — 'Number of Fed Rate Cuts' tail "
+                "categories are never-traded marks (median category sum "
+                f"{_fmt(cuts.get('median_category_sum'), '.2f')} > 1); re-check on "
+                "future bundles")
+        lines += [
             "",
             "Same event priced in two markets; gaps are staleness-inflated "
             "(sparse prints, 48h carry) — persistent large gaps are the leads.",
         ]
     else:
         lines.append("_no fed_path results (run fed_path_check.py)_")
+
+    lines += ["", "### 4b. Regional CPI aggregation identity (B10)", ""]
+    reg = _load_json(REGIONAL_DIR / "summary.json")
+    if reg:
+        lines.append(
+            f"- mean gap {_fmt(reg.get('mean_gap_pp'), '+.2f')}pp (constant ≈ "
+            f"weights/base error); demeaned |gap| p95 "
+            f"{_fmt(reg.get('demeaned_p95_abs_pp'), '.2f')}pp; persistent "
+            f"(24h+) runs: {reg.get('n_persistent_runs', '-')} — "
+            f"{'**coherent** (no persistent violations)' if not reg.get('n_persistent_runs') else '**VIOLATIONS — inspect regional_gap.csv**'}")
+    else:
+        lines.append("_no regional results (run regional_cpi_check.py)_")
+
+    lines += ["", "### 4c. Do inconsistencies close at releases? (D4)", ""]
+    rel = _load_json(RELEASE_DIR / "summary.json")
+    if rel:
+        any_compress = any((r.get("verdict") or "").startswith("RELEASES")
+                           for r in rel.get("results", []))
+        lines.append(
+            f"- pooled post/pre |score| ratio around leg-market release days: "
+            f"**{_fmt(rel.get('pooled_post_pre_ratio'), '.3f')}** "
+            + ("— some rules compress AT releases (see "
+               "`analysis/releases/summary.json`)" if any_compress else
+               "— NO rule shows release-specific compression: inconsistencies "
+               "decay on their own clock, which argues AGAINST the "
+               "data-resolves-mispricing mechanism"))
+    else:
+        lines.append("_no release-study results (run release_event_study.py)_")
 
     lines += ["", "## 5. Data-driven rule discovery (pair mining)", ""]
     disc = _load_json(DISC_DIR / "summary.json")
@@ -245,6 +350,22 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         ]
     else:
         lines.append("_no discovery results (run discover_rules.py)_")
+
+    lines += ["", "### 5b. Factor residuals (C2)", ""]
+    fac = _load_json(FACTOR_DIR / "summary.json")
+    if fac:
+        lines += [
+            f"- universe {fac.get('universe')} markets · first PC explains "
+            f"{_fmt(100 * fac.get('explained_variance_share', float('nan')), '.1f')}% "
+            f"of train change variance · test-period deviation events: "
+            f"{fac.get('n_events')}",
+            f"- mean reversion {_fmt(fac.get('mean_reversion'), '+.3f')} vs matched "
+            f"control {_fmt(fac.get('matched_control_mean'), '+.3f')} "
+            f"(t(diff) {_fmt(fac.get('t_diff_vs_control'), '+.2f')}) — "
+            f"**{fac.get('verdict', '-').split(' (')[0]}**",
+        ]
+    else:
+        lines.append("_no factor results (run factor_residuals.py)_")
 
     lines += [
         "",
@@ -298,8 +419,9 @@ def main() -> None:
     ap.add_argument("--skip-backtest", action="store_true")
     ap.add_argument("--skip-scan", action="store_true")
     ap.add_argument("--skip-oos", action="store_true")
+    ap.add_argument("--skip-settlement", action="store_true")
     ap.add_argument("--skip-extras", action="store_true",
-                    help="skip fed_path + discovery steps")
+                    help="skip fed_path + discovery + factor steps")
     args = ap.parse_args()
 
     zip_path = args.zip or sig.find_latest_zip()
@@ -349,6 +471,13 @@ def main() -> None:
         rule_status[rule_key] = "ok"
         print("  -> ok")
 
+    if not args.skip_settlement:
+        print("hold-to-settlement test ...", flush=True)
+        settle_args = [*zip_arg, "--z-window", str(args.z_window)]
+        if args.rules:
+            settle_args += ["--rules", *args.rules]
+        rc, tail = _run("settlement_test.py", *settle_args)
+        print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
     if not args.skip_oos:
         print(f"OOS gate (split {args.oos_split}) ...", flush=True)
         oos_args = ["--split", args.oos_split, *zip_arg]
@@ -362,6 +491,15 @@ def main() -> None:
         print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
         print("pair-mining discovery ...", flush=True)
         rc, tail = _run("discover_rules.py", "--split", args.oos_split, *zip_arg)
+        print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
+        print("factor residuals ...", flush=True)
+        rc, tail = _run("factor_residuals.py", "--split", args.oos_split, *zip_arg)
+        print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
+        print("regional CPI identity ...", flush=True)
+        rc, tail = _run("regional_cpi_check.py", *zip_arg)
+        print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
+        print("release event study ...", flush=True)
+        rc, tail = _run("release_event_study.py", *zip_arg)
         print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
 
     REPORT_DIR.mkdir(exist_ok=True)

@@ -43,8 +43,8 @@ OUT_DIR = sig.out_base() / "discovery"
 DEFAULT_SPLIT = "2026-05-01"
 
 
-def build_universe(hist: pd.DataFrame, markets: pd.DataFrame, min_rows: int
-                   ) -> dict[str, pd.Series]:
+def build_universe(hist: pd.DataFrame, markets: pd.DataFrame, min_rows: int,
+                   zip_path: Path | None = None) -> dict[str, pd.Series]:
     y = hist[(hist.side == "Y") & hist.strike.notna()]
     counts = y.groupby("market_name").agg(rows=("avg", "size"),
                                           strikes=("strike", "nunique"))
@@ -52,7 +52,7 @@ def build_universe(hist: pd.DataFrame, markets: pd.DataFrame, min_rows: int
     series: dict[str, pd.Series] = {}
     for name in sorted(names):
         try:
-            s = sig.implied_median_series(hist, markets, name)
+            s = sig.cached_implied_series(zip_path, hist, markets, name)
         except (ValueError, KeyError):
             continue
         if s.notna().sum() >= 200:
@@ -174,7 +174,7 @@ def main() -> None:
     markets = sig.load_markets(zip_path)
     hist = sig.load_history(zip_path)
 
-    series = build_universe(hist, markets, args.min_rows)
+    series = build_universe(hist, markets, args.min_rows, zip_path=zip_path)
     print(f"universe: {len(series)} markets with >= {args.min_rows} ladder rows")
     if len(series) < 2:
         raise SystemExit("universe too small")

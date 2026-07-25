@@ -44,8 +44,8 @@ Statuses: `[x]` done in this pass · `[ ]` open · `[~]` partially done.
   use `realtime_start` (already collected) — ALFRED-style vintages.
 - [x] **A8. Multiple-testing awareness.** We test many rules × horizons ×
   thresholds. The report now shows the whole grid rather than a cherry-picked
-  cell. `[ ]` Formal FDR control (Benjamini–Hochberg across rules) once event
-  counts justify it.
+  cell. `[x]` Formal FDR control (2026-07-23): the report's rules table now
+  carries Benjamini–Hochberg q-values over the permutation p's across rules.
 - [x] **A9. Out-of-sample discipline.** `analysis/oos_test.py`: frozen
   thresholds, events starting after `--split` (default 2026-05-01) only,
   OOS-restricted controls, OOS-only backtest trades. Wired into run_all
@@ -86,11 +86,17 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   expiration. IB quotes the target as the range MIDPOINT; boundaries are
   S(r_mid-0.25)=1-P(cut), S(r_mid)=P(hike), r_mid snapped from FRED DFF.
   First result: mean |gap| ~3-4c (staleness-inflated), tails to 11c.
-  `[ ]` Extend to Number of Fed Rate Cuts (path-count convolution) and to
-  non-front meetings.
-- [ ] **B10. Regional CPI aggregation.** National CPI ≈ weighted average of
-  the many regional CPI markets (NY, Chicago, Atlanta, DC, …). A
-  cross-sectional accounting identity — much stronger than a correlation.
+  `[x]` Extended (2026-07-23): non-front meetings measured (mean|gap| ~6-7c,
+  ~2x front — staleness); cuts-count bound implemented as a model-free
+  one-sided identity (P(net decline >= k) <= P(cuts >= k)) but NOT TESTABLE
+  yet — the cuts market's tail categories are never-traded marks whose
+  prices sum to ~2.5; re-checked automatically each run.
+- [x] **B10. Regional CPI aggregation.** `analysis/regional_cpi_check.py`
+  (2026-07-25): national yoy vs BLS-weighted census-region markets. Regions
+  price NSA INDEX LEVELS (own base periods!) — converted to implied yoy via
+  FRED CUUR0x00SA0 bases at the front reference month. First result: mean
+  gap +0.32pp (constant ≈ weights/base error), demeaned deviations within
+  strike granularity, ZERO persistent 24h+ runs → **aggregation-coherent**.
 - [x] **B11. Cross-country replication.** Checked coverage: Canada/Eurozone
   Recession markets are dead (1 contract each) and Eurozone Unemployment
   stopped printing in April → only `okun_canada` was viable (added, thin).
@@ -104,9 +110,12 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   correlation sits on a ~25-bar overlap (chance across 814 tested pairs).
   The venue is too thin/asynchronous for data-mined rules yet; rerun as data
   accrues.
-- [ ] **C2. Factor residuals.** PCA on the implied-series panel → macro
-  factor(s); flag markets whose price deviates from factor-implied value
-  (cross-sectional residual z). Candidate "own rule" generator.
+- [x] **C2. Factor residuals.** `analysis/factor_residuals.py`: first PC on
+  train-standardized 6h changes (loadings frozen at the split), residual-z
+  events on the test period vs a magnitude-matched control. First result
+  (Jul-23 bundle): factor explains only ~3% of change variance; deviations
+  revert but NOT beyond equally-extreme bars (t(diff) ≈ 1.3) → WEAK. Reruns
+  in run_all as data accrues.
 - [x] **C3. Within-market static-arbitrage scanner.** Monotonicity of the
   survival ladder P(X>K₁) ≥ P(X>K₂) for K₁<K₂ (within expiry!), YES/NO
   parity, persistence of violations. Measured: 1.5–6.5% adjacent-pair
@@ -132,9 +141,13 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
 - [x] **D3. Power analysis.** Given observed event rate (~25 events/93d) and
   effect size, the report estimates how many days of collection are needed
   for a conclusive test — turns "keep collecting" into a number.
-- [ ] **D4. Release-time event studies.** Use FRED `realtime_start` as a
-  release calendar: do inconsistencies close *at* macro releases? Mechanism
-  evidence, and a natural entry-timing refinement.
+- [x] **D4. Release-time event studies.** `analysis/release_event_study.py`
+  (2026-07-25). No external calendar needed: contracts EXPIRE on release day,
+  so each rule's releases = its leg markets' expirations. Statistic: median
+  post/pre |score| ratio (±48h) vs bootstrap random anchors. First result:
+  pooled ratio 0.99, NO rule shows release-specific compression —
+  inconsistencies decay on their own clock, which argues AGAINST the
+  "data resolves mispricing" mechanism and FOR construction noise.
 - [x] **D5. Machine-readable outputs.** validate/backtest now write JSON
   summaries (`analysis/validation/*.json`, `analysis/backtest/*.json`) so
   the report generator and future meta-analyses don't scrape stdout.
@@ -181,8 +194,10 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   been running through Jul-07 → new export roughly doubles the window and
   provides the OOS segment for A9. (Pulled during this pass; Jul-23 bundle
   pulled 2026-07-23 — ~137d window, findings re-run, conclusions unchanged.)
-- [ ] **F2. Scheduled export pulls.** Monthly (or CI-triggered) export+download
-  so the local bundle never goes stale again.
+- [x] **F2. One-command export pulls.** `scripts/refresh_data.sh`: VPS export →
+  download → FRED refresh → readiness audit. Host details stay in `.env`
+  (gitignored; placeholders in `.env.example`). Scheduling it (cron/CI) is
+  left to the operator.
 - [~] **F3. Bid/ask capture.** Investigated (2026-07-07): no public REST
   quote endpoint exists — probed `md/snapshot`, `iserver/marketdata/snapshot`,
   `event-contract/{snapshot,market-data,...}` (all 404); the
@@ -193,10 +208,20 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   effective-cost proxy** (`arbitrage_scan.py` → `parity_by_market.csv`,
   joined against break-evens in the report): p75 ≈ 1c on every rule market,
   which payrolls_labor's ~4c break-even clears. Real books are likely wider.
-- [ ] **F4. FRED on the VPS timer.** Existing TODO (C5b): move
-  `collect_fred.py` to a systemd timer next to the collector jobs.
-- [ ] **F5. Signal materialization.** Persist computed implied series per
-  bundle so downstream scripts stop recomputing them.
+  **Route confirmed (2026-07-25):** the public web app is a marketing page
+  only (`interactivebrokers.ie/predictionmarkets`); live quotes require an
+  AUTHENTICATED IBKR Client Portal session — CP Gateway on the VPS +
+  `wss://api.ibkr.com/v1/api/ws` (`smd+conid` with fields 84/86), i.e. real
+  account credentials and a session-keepalive job. Deliberate decision, not
+  an engineering gap; build only if a rule ever survives the OOS gate.
+- [x] **F4. FRED on the VPS timer.** Superseded (2026-07-23): `fred.sqlite`
+  is consumed locally, so a VPS timer would also need a sync path back.
+  `scripts/refresh_data.sh` (F2) refreshes FRED on every data pull instead.
+- [x] **F5. Signal materialization.** `signals.cached_implied_series` /
+  `cached_implied_prob_frame` (2026-07-25): per-bundle disk cache keyed by
+  bundle name+mtime + every construction parameter + a cache version;
+  wired into build_rule_panel, discover_rules, factor_residuals and
+  regional_cpi_check. Bump `SIGNALS_CACHE_VERSION` when signal code changes.
 - [ ] **F6. Live monitor.** Evaluate implemented rules against the freshest
   data on a timer; alert on new flags. Only worth building if validation
   survives OOS (A9).

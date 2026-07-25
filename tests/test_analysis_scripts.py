@@ -401,3 +401,157 @@ def test_simulate_forces_exit_before_ref_switch():
     assert t["exit"] == idx[5]
     # no fictitious PnL from the 0.5 -> 0.9 contract morph
     assert t["gross"] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------- #
+# unit + smoke: hold-to-settlement (settlement_test.py)
+# --------------------------------------------------------------------------- #
+def _hist_frame(rows):
+    df = pd.DataFrame(rows, columns=["underlying_conid", "conid", "side", "strike",
+                                     "expiration", "ts_utc", "avg"])
+    df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
+    df["expiration"] = pd.to_datetime(df["expiration"], utc=True)
+    return df
+
+
+def test_settlement_value_pin_and_unresolved():
+    import settlement_test as st
+
+    h = _hist_frame([
+        [1, 100, "Y", 3.0, "2026-04-10", "2026-04-09 12:00", 0.98],
+        [1, 101, "Y", 3.5, "2026-04-10", "2026-04-09 12:00", 0.50],
+        [1, 102, "Y", 4.0, "2026-08-01", "2026-04-09 12:00", 0.30],
+        [1, 103, "Y", 9.9, "2026-07-10", "2026-06-05 12:00", 0.50],  # extends data end
+    ])
+    val, status = st.settlement_value(h, 100)
+    assert (val, status) == (1.0, "settled")
+    val, status = st.settlement_value(h, 101)
+    assert val is None and status == "unpinned"
+    val, status = st.settlement_value(h, 102)      # expires after data end
+    assert val is None and status == "unresolved"
+
+
+def test_settlement_ladder_inference():
+    import settlement_test as st
+
+    filler = [1, 999, "Y", 9.9, "2026-07-10", "2026-06-05 12:00", 0.50]
+    # strike 3.0 unpinned, but sibling strike 3.5 pinned at 1 -> X > 3.5 > 3.0
+    h = _hist_frame([
+        [1, 200, "Y", 3.0, "2026-04-10", "2026-04-09 12:00", 0.60],
+        [1, 201, "Y", 3.5, "2026-04-10", "2026-04-09 12:00", 0.97],
+        filler,
+    ])
+    val, status = st.settlement_with_ladder(h, 200)
+    assert (val, status) == (1.0, "settled_ladder")
+    # and the reverse: lower strike pinned at 0 -> X <= 2.5 < 3.0
+    h2 = _hist_frame([
+        [1, 300, "Y", 3.0, "2026-04-10", "2026-04-09 12:00", 0.40],
+        [1, 301, "Y", 2.5, "2026-04-10", "2026-04-09 12:00", 0.03],
+        filler,
+    ])
+    val, status = st.settlement_with_ladder(h2, 300)
+    assert (val, status) == (0.0, "settled_ladder")
+
+
+def test_fred_resolver_yoy_and_level(tmp_path):
+    import settlement_test as st
+
+    db = tmp_path / "fred.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE macro_observations (series_id TEXT, label TEXT, mapping TEXT,"
+            " obs_date TEXT, value REAL, realtime_start TEXT, realtime_end TEXT, fetched_at TEXT)")
+        rows = [("UNRATE", "u", "m", "2026-03-01", 4.2, None, None, "x")]
+        base = 300.0
+        for i, month in enumerate(pd.period_range("2025-03", "2026-03", freq="M")):
+            rows.append(("CPIX", "c", "m", f"{month}-01", base * (1 + 0.003 * i),
+                         None, None, "x"))
+        conn.executemany("INSERT INTO macro_observations VALUES (?,?,?,?,?,?,?,?)", rows)
+
+    resolver = st.FredResolver()
+    resolver._cache = {sid: sig.load_fred_series(sid, db=db) for sid in ("UNRATE", "CPIX")}
+
+    exp = pd.Timestamp("2026-04-10", tz="UTC")
+    val, status = resolver.realized({"kind": "level", "series": "UNRATE",
+                                     "ref_lag_months": 1}, exp)
+    assert status == "ok" and val == pytest.approx(4.2)
+    # yoy of the geometric series: ~ (1.003*12/(1.003*0)) style; just check sane band
+    val, status = resolver.realized({"kind": "yoy_pct", "series": "CPIX",
+                                     "ref_lag_months": 1}, exp)
+    assert status == "ok" and 3.0 < val < 4.5
+    # outcome convention: 1 iff realized > strike
+    out, s = resolver.outcome({"kind": "level", "series": "UNRATE",
+                               "ref_lag_months": 1}, 4.0, exp)
+    assert (out, s) == (1.0, "settled_fred")
+    out, _ = resolver.outcome({"kind": "level", "series": "UNRATE",
+                               "ref_lag_months": 1}, 4.2, exp)
+    assert out == 0.0                                # tie -> NO
+    # future reference month -> pending
+    val, status = resolver.realized({"kind": "level", "series": "UNRATE",
+                                     "ref_lag_months": 1},
+                                    pd.Timestamp("2027-01-10", tz="UTC"))
+    assert val is None and status == "fred_pending" or status == "pending"
+
+
+def test_settlement_script_runs_on_synthetic(bundle: Path, out_dir: Path):
+    r = _run("settlement_test.py", "--zip", str(bundle), "--rules", "phillips",
+             "--z-window", "12", out=out_dir)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((out_dir / "settlement" / "summary.json").read_text())
+    assert out["results"][0]["rule"] == "phillips"
+    assert "n_flags" in out["results"][0]
+
+
+def test_factor_residuals_graceful_on_small_universe(bundle: Path, out_dir: Path):
+    r = _run("factor_residuals.py", "--zip", str(bundle), out=out_dir)
+    assert r.returncode == 1
+    assert "universe too small" in (r.stderr + r.stdout)
+
+
+def test_bh_qvalues_monotone():
+    import run_all
+
+    q = run_all._bh_qvalues({"a": 0.01, "b": 0.02, "c": 0.9, "d": float("nan")})
+    assert q["a"] == pytest.approx(0.03)   # 0.01 * 3 / 1, capped by next
+    assert q["b"] == pytest.approx(0.03)   # 0.02 * 3 / 2
+    assert q["c"] == pytest.approx(0.9)
+    assert "d" not in q
+
+
+# --------------------------------------------------------------------------- #
+# unit + smoke: B10 regional CPI, D4 release study, F5 signal cache
+# --------------------------------------------------------------------------- #
+def test_regional_cpi_fails_gracefully_without_regional_markets(bundle: Path, out_dir: Path):
+    r = _run("regional_cpi_check.py", "--zip", str(bundle), out=out_dir)
+    assert r.returncode == 1
+    assert "required CPI markets missing" in (r.stderr + r.stdout)
+
+
+def test_release_event_study_runs_on_synthetic(bundle: Path, out_dir: Path):
+    r = _run("release_event_study.py", "--zip", str(bundle), "--rules", "phillips",
+             "--z-window", "12", out=out_dir)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((out_dir / "releases" / "summary.json").read_text())
+    assert out["results"][0]["rule"] == "phillips"
+
+
+def test_cached_implied_series_roundtrip(bundle: Path, tmp_path: Path, monkeypatch):
+    h = sig.load_history(bundle, use_cache=False)
+    m = sig.load_markets(bundle)
+    plain = sig.implied_median_series(h, m, "US Core CPI")
+
+    # tmp bundle is outside REPO_ROOT -> bypass (no cache file, same values)
+    got = sig.cached_implied_series(bundle, h, m, "US Core CPI")
+    pd.testing.assert_series_equal(got, plain)
+
+    # point REPO_ROOT + CACHE_DIR at tmp -> cache written and read back
+    monkeypatch.setattr(sig, "REPO_ROOT", bundle.parent)
+    monkeypatch.setattr(sig, "CACHE_DIR", tmp_path / "cache")
+    first = sig.cached_implied_series(bundle, h, m, "US Core CPI")
+    files = list((tmp_path / "cache").glob("*.pkl"))
+    assert len(files) == 1
+    second = sig.cached_implied_series(bundle, h, m, "US Core CPI")
+    pd.testing.assert_series_equal(first, second)
+    # different params -> different cache entry
+    sig.cached_implied_series(bundle, h, m, "US Core CPI", roll_days=3)
+    assert len(list((tmp_path / "cache").glob("*.pkl"))) == 2

@@ -133,13 +133,13 @@ def build_rule_panel(
     cols: dict[str, pd.Series] = {}
     for role, spec in rule["indicators"].items():
         role_kind = spec.get("signal", kind)
-        cols[role] = sig.implied_series(
-            history, markets, spec["market_name"], kind=role_kind, band=band,
-            freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
+        cols[role] = sig.cached_implied_series(
+            zip_path, history, markets, spec["market_name"], kind=role_kind,
+            band=band, freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
             min_volume=min_volume)
         if with_prices:
-            frame = sig.implied_prob_frame(
-                history, markets, spec["market_name"], band=band,
+            frame = sig.cached_implied_prob_frame(
+                zip_path, history, markets, spec["market_name"], band=band,
                 freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
                 min_volume=min_volume)
             cols[f"px_{role}"] = frame["value"]

@@ -21,6 +21,23 @@
 # Optional per rule: `signal: prob|median` (default median); the same key on
 # an individual indicator overrides it for that leg only (thin markets).
 #
+# Optional per indicator: `settlement:` — how to resolve a YES contract's
+# outcome from FRED for the hold-to-settlement test (settlement_test.py).
+#   kind: level        realized = series value for the reference month
+#         yoy_pct      realized = 12-month % change, rounded to 1dp (BLS style)
+#         mom_diff     realized = 1-month difference (x scale)
+#         weekly_level realized = latest weekly obs ending before expiry
+#         daily_level  realized = last daily obs at/before expiry
+#         fedfunds_mid realized = DFF after the meeting snapped to the 25bp
+#                      midpoint grid (x.125)
+#   scale:          multiply the FRED value by this (unit alignment), default 1
+#   ref_lag_months: reference month = expiration month - lag (monthly kinds)
+#   caution:        free text; set when FRED (revised) values may differ from
+#                   the initial print the venue settles on -> treat with care.
+# Outcome = 1 if realized > strike, else 0 (ties -> NO). Markets without a
+# settlement block (NBER recession, GDP with ambiguous release timing, ...)
+# fall back to price-pin evidence only.
+#
 # NOTE: the project is at the EXPLORATORY/TESTING stage - these rules are
 # hypotheses to validate, not a proven trading signal.
 
@@ -46,10 +63,12 @@ rules:
         market_name: "US Core CPI"
         fred_series: "CPILFESL"
         direction: "higher = more inflation pressure"
+        settlement: {kind: yoy_pct, series: CPILFENS, ref_lag_months: 1}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = looser labor (more unemployment)"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: product, terms: [inflation, labor], sign: 1}
       flag: {metric: value, threshold: 1.0}
@@ -66,6 +85,7 @@ rules:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = recession risk"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
       recession:
         market_name: "US Recession"
         fred_series: "USREC"
@@ -91,14 +111,17 @@ rules:
         market_name: "US Fed Funds Target Rate"
         fred_series: "FEDFUNDS"
         direction: "higher = tighter policy priced"
+        settlement: {kind: fedfunds_mid, series: DFF}
       inflation:
         market_name: "US Consumer Price Index Yearly"
         fred_series: "CPIAUCSL"
         direction: "higher = more inflation priced"
+        settlement: {kind: yoy_pct, series: CPIAUCNS, ref_lag_months: 1}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = looser labor"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: linear, weights: {policy: 1, inflation: -0.5, labor: 0.5}}
       flag: {metric: abs, threshold: 1.5}
@@ -121,6 +144,7 @@ rules:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = looser labor"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: product, terms: [growth, labor], sign: 1}
       flag: {metric: value, threshold: 1.0}
@@ -158,10 +182,12 @@ rules:
         market_name: "JOLTS"
         fred_series: "JTSJOL"
         direction: "higher = more vacancies priced"
+        settlement: {kind: level, series: JTSJOL, scale: 0.001, ref_lag_months: 2, caution: "JOLTS initial-print revisions are large; pin evidence preferred"}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = looser labor"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: product, terms: [vacancies, labor], sign: 1}
       flag: {metric: value, threshold: 1.0}
@@ -179,10 +205,12 @@ rules:
         market_name: "US Fed Funds Target Rate"
         fred_series: "FEDFUNDS"
         direction: "higher = wider US-JP differential (BoJ ~static)"
+        settlement: {kind: fedfunds_mid, series: DFF}
       fx:
         market_name: "US Dollar to Japanese Yen Exchange Rate"
         fred_series: "DEXJPUS"
         direction: "higher = stronger USD vs JPY"
+        settlement: {kind: daily_level, series: DEXJPUS, caution: "noon rate vs venue fixing may differ"}
     logic:
       score: {type: product, terms: [policy, fx], sign: -1}
       flag: {metric: value, threshold: 1.0}
@@ -199,10 +227,12 @@ rules:
         market_name: "US Initial Jobless Claims"
         fred_series: "ICSA"
         direction: "higher = weaker labor priced"
+        settlement: {kind: weekly_level, series: ICSA}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = weaker labor priced"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: product, terms: [claims, labor], sign: -1}
       flag: {metric: value, threshold: 1.0}
@@ -218,10 +248,12 @@ rules:
         market_name: "US Payroll Employment"
         fred_series: "PAYEMS"
         direction: "higher = stronger labor demand priced"
+        settlement: {kind: mom_diff, series: PAYEMS, scale: 1000, ref_lag_months: 1, caution: "FRED holds revised payrolls; venue settles the initial print"}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
         direction: "higher = looser labor"
+        settlement: {kind: level, series: UNRATE, ref_lag_months: 1}
     logic:
       score: {type: product, terms: [payrolls, labor], sign: 1}
       flag: {metric: value, threshold: 1.0}
@@ -237,10 +269,12 @@ rules:
         market_name: "US Consumer Price Index Yearly"
         fred_series: "CPIAUCSL"
         direction: "higher = more headline inflation priced"
+        settlement: {kind: yoy_pct, series: CPIAUCNS, ref_lag_months: 1}
       core:
         market_name: "US Core CPI"
         fred_series: "CPILFESL"
         direction: "higher = more core inflation priced"
+        settlement: {kind: yoy_pct, series: CPILFENS, ref_lag_months: 1}
     logic:
       score: {type: linear, weights: {headline: 1, core: -1}}
       flag: {metric: abs, threshold: 1.5}
@@ -259,6 +293,7 @@ rules:
         market_name: "US Core CPI"
         fred_series: "CPILFESL"
         direction: "higher = more inflation priced"
+        settlement: {kind: yoy_pct, series: CPILFENS, ref_lag_months: 1}
     logic:
       score: {type: linear, weights: {pce: 1, core: -1}}
       flag: {metric: abs, threshold: 1.5}
