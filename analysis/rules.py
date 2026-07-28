@@ -102,6 +102,7 @@ def build_rule_panel(
     cfg: dict | None = None,
     history: pd.DataFrame | None = None,
     markets: pd.DataFrame | None = None,
+    px_agg: str = "last",
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """Aligned panel for one rule: implied series per role, causal z-scores,
     inconsistency score. Warmup rows (z NaN) are dropped.
@@ -141,7 +142,7 @@ def build_rule_panel(
             frame = sig.cached_implied_prob_frame(
                 zip_path, history, markets, spec["market_name"], band=band,
                 freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
-                min_volume=min_volume)
+                min_volume=min_volume, agg=px_agg)
             cols[f"px_{role}"] = frame["value"]
             cols[f"pxref_{role}"] = frame["ref_conid"]
 

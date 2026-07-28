@@ -73,12 +73,15 @@ def load_api_key() -> str:
     return key
 
 
-def fetch_series(series_id: str, key: str) -> list[dict]:
-    resp = requests.get(
-        FRED_BASE,
-        params={"series_id": series_id, "api_key": key, "file_type": "json"},
-        timeout=30,
-    )
+def fetch_series(series_id: str, key: str, output_type: int | None = None) -> list[dict]:
+    params = {"series_id": series_id, "api_key": key, "file_type": "json"}
+    if output_type is not None:
+        # ALFRED vintages: output_type=4 = initial release only; needs the
+        # full realtime window, else the API returns just today's vintage.
+        params.update({"output_type": output_type,
+                       "realtime_start": "1776-07-04",
+                       "realtime_end": "9999-12-31"})
+    resp = requests.get(FRED_BASE, params=params, timeout=30)
     resp.raise_for_status()
     payload = resp.json()
     if "observations" not in payload:
@@ -109,6 +112,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # A7: initial-release vintage (ALFRED output_type=4). value_initial is the
+    # FIRST-published number; initial_release_date its publication date. The
+    # default `value` column stays the latest revision.
+    for col, sqltype in (("value_initial", "REAL"), ("initial_release_date", "TEXT")):
+        try:
+            conn.execute(f"ALTER TABLE macro_observations ADD COLUMN {col} {sqltype}")
+        except sqlite3.OperationalError:
+            pass                          # column already exists
     conn.commit()
 
 
@@ -124,14 +135,41 @@ def store(conn: sqlite3.Connection, series_id: str, observations: list[dict]) ->
         ))
     conn.executemany(
         """
-        INSERT OR REPLACE INTO macro_observations
+        INSERT INTO macro_observations
         (series_id, label, mapping, obs_date, value, realtime_start, realtime_end, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (series_id, obs_date) DO UPDATE SET
+            label=excluded.label, mapping=excluded.mapping, value=excluded.value,
+            realtime_start=excluded.realtime_start,
+            realtime_end=excluded.realtime_end, fetched_at=excluded.fetched_at
         """,
         rows,
     )
     conn.commit()
     return len(rows)
+
+
+def store_initial_vintages(conn: sqlite3.Connection, series_id: str,
+                           observations: list[dict]) -> int:
+    """Attach initial-release values (ALFRED output_type=4) to stored rows.
+
+    In output_type=4 each observation's realtime_start IS the initial
+    publication date — kept as a release calendar. Rows are only updated,
+    never created: an initial value without a current value is useless.
+    """
+    rows = [(parse_value(obs.get("value", ".")), obs.get("realtime_start"),
+             series_id, obs["date"])
+            for obs in observations]
+    with conn:
+        cur = conn.executemany(
+            """
+            UPDATE macro_observations
+            SET value_initial = ?, initial_release_date = ?
+            WHERE series_id = ? AND obs_date = ?
+            """,
+            rows,
+        )
+    return cur.rowcount if cur.rowcount != -1 else len(rows)
 
 
 def main() -> None:
@@ -164,6 +202,12 @@ def main() -> None:
             total += n
             latest = next((o for o in reversed(obs) if o.get("value") not in (".", "")), None)
             tail = f"latest {latest['date']}={latest['value']}" if latest else "no data"
+            try:  # A7: initial-release vintages (best effort; series may lack them)
+                initial = fetch_series(sid, key, output_type=4)
+                n_init = store_initial_vintages(conn, sid, initial)
+                tail += f", {n_init} initial vintages"
+            except Exception as exc:  # noqa: BLE001
+                tail += f", vintages unavailable ({exc})"
             print(f"  {sid:10s} {n:6d} obs  ({tail})")
         except Exception as exc:  # noqa: BLE001 - report and continue
             print(f"  {sid:10s} ERROR: {exc}")

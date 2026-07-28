@@ -36,6 +36,7 @@ outage Jun 4–12 2026) and is empty for some markets.
 | `factor_residuals.py` | C2: PCA macro factor on the implied panel; do deviations from the factor revert (train-frozen loadings, hard split)? |
 | `regional_cpi_check.py` | B10: national CPI yoy vs BLS-weighted census-region CPI markets (levels → yoy via FRED bases). Accounting identity. |
 | `release_event_study.py` | D4: does \|score\| compress at macro releases (leg-market expiration days) vs random times? Mechanism evidence. |
+| `unit_spreads.py` | C4: implied inflation wedges (headline−core, PCE−CPI) in %-points from ladder quantiles, vs the realized 10y band. |
 | `arbitrage_scan.py` | Model-free within-market checks: ladder monotonicity, YES/NO parity, persistence. |
 | `fed_path_check.py` | Same-event identity: Fed Decision (categorical) vs Fed Funds ladder at the same meeting. |
 | `discover_rules.py` | Pair mining: 6h-change correlations, Bonferroni screen, OOS confirmation, YAML stubs. |
@@ -108,15 +109,19 @@ positive costed edge under execution-integrity constraints. This mirrors
 the project's original conclusion: inconsistencies revert in z-space, but
 the reversion is not captureable on these contracts with this execution.
 
-**Hold-to-settlement construction (new 2026-07-23).** The construction that
-sidesteps reference switching by design: on a flag, hold each leg's front
-contract to resolution. Outcomes come from a FRED settlement mapping
-(mappings.yaml `settlement:` blocks — NSA CPI basis, venue-consistent
-reference months) with price-pin/ladder-inference fallback and a FRED-vs-pin
-disagreement guard (caught the SA-vs-NSA CPI trap and JOLTS initial-print
-revisions during development). First pass: 5–20 settled trades per rule,
-mixed signs, |t| ≤ 2.3 — no edge evidence either, but this instrument's N
-grows automatically as expiries resolve.
+**Hold-to-settlement construction (new 2026-07-23, vintages 2026-07-25).**
+The construction that sidesteps reference switching by design: on a flag,
+hold each leg's front contract to resolution. Outcomes come FIRST from the
+FRED settlement mapping (mappings.yaml `settlement:` blocks — NSA CPI basis,
+venue-consistent reference months, INITIAL-release vintages via ALFRED);
+price-pin/ladder inference only covers unmapped markets. The hierarchy
+matters: trading halts before the release, so pins are pre-release
+expectations — April JOLTS pinned 0.05 at strike 7.4 and settled YES on the
+7.618M initial print. The FRED-vs-pin disagreement counter now counts
+surprises (plus any residual mapping errors; it caught the SA-vs-NSA CPI
+trap during development). Current pass: 5–20 settled trades per rule, mixed
+signs, |t| ≤ 1.2 — no edge evidence either way yet; N grows automatically
+as expiries resolve.
 
 **Permutation test (strictest null).** Circular-shift permutation
 (`--permute`) keeps each leg's own dynamics but destroys cross-leg

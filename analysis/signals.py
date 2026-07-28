@@ -176,6 +176,7 @@ def implied_prob_frame(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    agg: str = "last",
 ) -> pd.DataFrame:
     """Front-expiry implied probability from one reference contract, plus the
     reference conid per bar.
@@ -184,18 +185,39 @@ def implied_prob_frame(
     observations in the trailing REF_ACTIVITY_WINDOW — causal (no full-window
     liquidity look-ahead [A4]) and adaptive when activity migrates strikes.
 
+    agg="last" (default): each grid bar carries the reference contract's last
+    (possibly mark) price. agg="vwap" [A5]: each grid bar is the reference
+    contract's volume-weighted price over its actual prints in that bar;
+    zero-volume bars go NaN (then bounded ffill) — 87% of raw bars are
+    volume-0 marks, so this is the marks-sensitivity view of the same series.
+
     Columns: `value` (price of the reference contract, (0,1)) and `ref_conid`.
     The stitched value series JUMPS when the reference switches (expiry roll or
     activity migration) — a position cannot be held across a switch, so any
     execution logic must exit before the ref_conid changes.
     """
+    if agg not in ("last", "vwap"):
+        raise ValueError(f"unknown agg {agg!r} (use 'last' or 'vwap')")
     sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume)
     px = sub.pivot_table(index="ts_utc", columns="conid", values="avg", aggfunc="last")
     activity = px.notna().rolling(REF_ACTIVITY_WINDOW).sum()
     ref_col = activity.to_numpy().argmax(axis=1)          # ties -> lowest conid
-    carried = px.ffill()                                   # per-contract last value
-    vals = carried.to_numpy()[np.arange(len(px)), ref_col]
     conids = np.asarray(px.columns)[ref_col].astype(float)
+    rows = np.arange(len(px))
+    if agg == "vwap":
+        vol = (sub.pivot_table(index="ts_utc", columns="conid", values="volume",
+                               aggfunc="sum").reindex_like(px))
+        raw = pd.Series(px.to_numpy()[rows, ref_col], index=px.index)
+        w = pd.Series(vol.to_numpy()[rows, ref_col], index=px.index).fillna(0.0)
+        num = (raw * w).resample(freq).sum()
+        den = w.resample(freq).sum()
+        value = num / den.replace(0.0, np.nan)
+        ref = (pd.Series(conids, index=px.index)
+               [~px.index.duplicated(keep="last")].resample(freq).last())
+        return (pd.DataFrame({"value": value, "ref_conid": ref})
+                .ffill(limit=ffill_limit))
+    carried = px.ffill()                                   # per-contract last value
+    vals = carried.to_numpy()[rows, ref_col]
     frame = pd.DataFrame({"value": vals, "ref_conid": conids}, index=px.index)
     frame = frame[~frame.index.duplicated(keep="last")].sort_index()
     out = frame.resample(freq).last().ffill(limit=ffill_limit)
@@ -219,23 +241,61 @@ def implied_prob_series(
     return frame["value"].rename(market_name)
 
 
-def _ladder_median(strikes: np.ndarray, survival: np.ndarray) -> float:
-    """Implied median outcome from a survival ladder: the strike x where
-    P(X > x) = 0.5, by linear interpolation. survival = P(X > strike)."""
+def _ladder_quantile(strikes: np.ndarray, survival: np.ndarray,
+                     level: float = 0.5) -> float:
+    """Strike x where the survival curve crosses `level`, by linear
+    interpolation. survival = P(X > strike); level=0.5 gives the median,
+    level=1-p gives the p-quantile of X [C4]."""
     order = np.argsort(strikes)
     x = strikes[order]
     s = survival[order]  # ideally decreasing in strike
     if len(x) == 1:
         return float(x[0])
-    if s.min() > 0.5:      # median sits above the highest strike we observe
+    if s.min() > level:    # crossing sits above the highest strike we observe
         return float(x[-1])
-    if s.max() < 0.5:      # median sits below the lowest strike we observe
+    if s.max() < level:    # crossing sits below the lowest strike we observe
         return float(x[0])
-    for k in range(len(x) - 1):       # first adjacent pair bracketing 0.5
+    for k in range(len(x) - 1):       # first adjacent pair bracketing `level`
         s1, s2 = s[k], s[k + 1]
-        if (s1 - 0.5) * (s2 - 0.5) <= 0 and s1 != s2:
-            return float(x[k] + (0.5 - s1) * (x[k + 1] - x[k]) / (s2 - s1))
-    return float(x[np.argmin(np.abs(s - 0.5))])
+        if (s1 - level) * (s2 - level) <= 0 and s1 != s2:
+            return float(x[k] + (level - s1) * (x[k + 1] - x[k]) / (s2 - s1))
+    return float(x[np.argmin(np.abs(s - level))])
+
+
+def _ladder_median(strikes: np.ndarray, survival: np.ndarray) -> float:
+    """Implied median outcome from a survival ladder (see _ladder_quantile)."""
+    return _ladder_quantile(strikes, survival, 0.5)
+
+
+def implied_quantile_series(
+    history: pd.DataFrame,
+    markets: pd.DataFrame,
+    market_name: str,
+    p: float = 0.5,
+    band: tuple[float, float] = DEFAULT_BAND,
+    freq: str = DEFAULT_FREQ,
+    ffill_limit: int = DEFAULT_FFILL_LIMIT,
+    roll_days: int = DEFAULT_ROLL_DAYS,
+    min_volume: int = 0,
+) -> pd.Series:
+    """Market-implied p-QUANTILE of the outcome over time, front expiry only
+    [A1, C4]. p=0.5 is the median; p=0.25/0.75 give the implied IQR.
+
+    Reads the front expiry's YES survival ladder at each timestamp and
+    interpolates the strike where P(outcome > strike) = 1 - p. Strikes roll
+    as expiries roll, so coverage is continuous; values are in the
+    underlying's units (e.g. % or index level).
+    """
+    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume)
+    sub = sub.dropna(subset=["strike"])
+    if sub.empty:
+        raise ValueError(f"no strike data for {market_name!r}")
+    level = 1.0 - p
+    q = sub.groupby("ts_utc").apply(
+        lambda g: _ladder_quantile(g["strike"].to_numpy(), g["avg"].to_numpy(), level),
+        include_groups=False,
+    )
+    return _finalize(q, market_name, freq, ffill_limit)
 
 
 def implied_median_series(
@@ -248,22 +308,10 @@ def implied_median_series(
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
 ) -> pd.Series:
-    """Market-implied MEDIAN outcome over time, front expiry only [A1].
-
-    Reads the front expiry's YES survival ladder at each timestamp and
-    interpolates the strike where P(outcome > strike) = 0.5. Strikes roll as
-    expiries roll, so coverage is continuous; values are in the underlying's
-    units (e.g. % or index level).
-    """
-    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume)
-    sub = sub.dropna(subset=["strike"])
-    if sub.empty:
-        raise ValueError(f"no strike data for {market_name!r}")
-    med = sub.groupby("ts_utc").apply(
-        lambda g: _ladder_median(g["strike"].to_numpy(), g["avg"].to_numpy()),
-        include_groups=False,
-    )
-    return _finalize(med, market_name, freq, ffill_limit)
+    """Market-implied MEDIAN outcome (implied_quantile_series at p=0.5)."""
+    return implied_quantile_series(history, markets, market_name, p=0.5,
+                                   band=band, freq=freq, ffill_limit=ffill_limit,
+                                   roll_days=roll_days, min_volume=min_volume)
 
 
 def implied_series(
@@ -351,18 +399,19 @@ def cached_implied_prob_frame(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    agg: str = "last",
 ) -> pd.DataFrame:
     """implied_prob_frame with the same per-bundle disk cache [F5]."""
     use = zip_path is not None and Path(zip_path).resolve().parent == REPO_ROOT
     cache = None
     if use:
-        cache = _sig_cache_path(Path(zip_path), market_name, "frame", "prob",
+        cache = _sig_cache_path(Path(zip_path), market_name, f"frame-{agg}", "prob",
                                 band, freq, ffill_limit, roll_days, min_volume)
         if cache.exists():
             return pd.read_pickle(cache)
     f = implied_prob_frame(history, markets, market_name, band=band, freq=freq,
                            ffill_limit=ffill_limit, roll_days=roll_days,
-                           min_volume=min_volume)
+                           min_volume=min_volume, agg=agg)
     if cache is not None:
         CACHE_DIR.mkdir(exist_ok=True)
         f.to_pickle(cache)
@@ -408,22 +457,36 @@ def load_mappings(path: Path = MAPPINGS_PATH) -> dict:
         return yaml.safe_load(f)
 
 
-def load_fred_series(series_id: str, db: Path = FRED_DB) -> pd.Series:
+def load_fred_series(series_id: str, db: Path = FRED_DB,
+                     vintage: str = "latest") -> pd.Series:
     """Realized macro series from the FRED sqlite, as a tz-aware Series.
+
+    vintage="latest" (default): the current revised values.
+    vintage="initial": the FIRST-published value where collected (A7,
+    ALFRED output_type=4), falling back to the revised value — what a venue
+    that settles on the announcement actually pays on.
 
     NOTE (A7): the index is the REFERENCE PERIOD (obs_date), not the release
     date. A May CPI value only became public ~mid-June. Fine for context and
-    after-the-fact comparison; NOT usable as a causal conditioning variable.
-    Use realtime_start (also stored) for vintage-aware work.
+    after-the-fact comparison; NOT usable as a causal conditioning variable
+    (initial_release_date is stored for vintage-aware work).
     """
     import sqlite3
 
+    col = "COALESCE(value_initial, value)" if vintage == "initial" else "value"
     with sqlite3.connect(db) as conn:
-        rows = conn.execute(
-            "SELECT obs_date, value FROM macro_observations "
-            "WHERE series_id=? AND value IS NOT NULL ORDER BY obs_date",
-            (series_id,),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                f"SELECT obs_date, {col} FROM macro_observations "
+                "WHERE series_id=? AND value IS NOT NULL ORDER BY obs_date",
+                (series_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:   # pre-A7 DB without vintage columns
+            rows = conn.execute(
+                "SELECT obs_date, value FROM macro_observations "
+                "WHERE series_id=? AND value IS NOT NULL ORDER BY obs_date",
+                (series_id,),
+            ).fetchall()
     if not rows:
         raise ValueError(f"no FRED data for {series_id!r}")
     idx = pd.to_datetime([r[0] for r in rows], utc=True)

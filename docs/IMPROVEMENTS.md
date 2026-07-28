@@ -35,13 +35,22 @@ Statuses: `[x]` done in this pass · `[ ]` open · `[~]` partially done.
   `avg` there is a carried mark, not a trade. Signals may use marks
   (documented), but backtest fills on marks are optimistic.
   **Done: loader exposes volume; backtest gained `--min-volume` entry filter
-  as a sensitivity knob.** `[ ]` Full volume-weighted resampling.
+  as a sensitivity knob.** `[x]` Volume-weighted resampling (2026-07-25):
+  `implied_prob_frame(agg="vwap")` prices each bar from actual prints only
+  (zero-volume bars go NaN); `backtest.py --agg vwap` is the fills-realism
+  view. First check: payrolls gross PnL on trades-only fills ≈ 0 — the
+  mark-based result was not hiding profit.
 - [x] **A6. Robust timestamp parsing.** `ts_utc` has mixed dtypes in the real
   export; loader now parses with `errors="coerce"` and drops unparseable rows.
-- [ ] **A7. FRED vintage discipline.** `obs_date` is the *reference period*,
-  not the release date; a May CPI value is only public ~mid-June. Harmless
-  while FRED is context-only, but any future rule conditioning on FRED must
-  use `realtime_start` (already collected) — ALFRED-style vintages.
+- [x] **A7. FRED vintage discipline.** Done 2026-07-25: `collect_fred.py`
+  also pulls ALFRED `output_type=4` initial releases into `value_initial` +
+  `initial_release_date` (a true release calendar);
+  `load_fred_series(vintage="initial")` serves them. The settlement test now
+  settles on INITIAL prints — and the hierarchy was inverted to FRED-first
+  after a live counterexample: April JOLTS pinned 0.05 pre-release at strike
+  7.4, initial print 7.618M → settled YES (pins are pre-release
+  expectations; surprises flip them). NOTE: `obs_date` still indexes the
+  reference period; the causal-conditioning caveat stands for signal use.
 - [x] **A8. Multiple-testing awareness.** We test many rules × horizons ×
   thresholds. The report now shows the whole grid rather than a cherry-picked
   cell. `[x]` Formal FDR control (2026-07-23): the report's rules table now
@@ -122,10 +131,12 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
   violation rates within expiry; parity gap mean ~1c. This is the most
   direct evidence on "is there *any* free money" and needs no economic
   theory. → `analysis/arbitrage_scan.py`.
-- [ ] **C4. Ladder-shape rules.** Use full distributions (median, IQR, skew
-  from the survival curve) to state rules in *units* (e.g. CPI median minus
-  Core CPI median in %-points) instead of z-space — interpretable and
-  threshold-able against realized FRED spreads.
+- [x] **C4. Ladder-shape rules.** Done 2026-07-25:
+  `signals.implied_quantile_series` (any p; median now a special case) +
+  `analysis/unit_spreads.py` — implied headline−core and PCE−CPI wedges in
+  %-points vs the realized 10y [p5, p95] band. First result: both wedges
+  sit INSIDE their realized bands (0.1% / 4.4% of bars outside, zero
+  persistent 24h runs) → coherent in units too. Implied IQRs ~0.02-0.10pp.
 
 ## D. Statistical-method upgrades
 

@@ -277,6 +277,8 @@ def main() -> None:
     ap.add_argument("--size", choices=["fixed", "zscaled"], default="fixed")
     ap.add_argument("--min-volume", type=int, default=0,
                     help="use only bars with volume >= N (marks-sensitivity)")
+    ap.add_argument("--agg", choices=["last", "vwap"], default="last",
+                    help="execution-price aggregation per bar; vwap = trades only [A5]")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -286,7 +288,7 @@ def main() -> None:
     try:
         panel, roles, rule = rules.build_rule_panel(
             args.rule, zip_path, args.z_window, kind=args.signal,
-            min_volume=args.min_volume, with_prices=True)
+            min_volume=args.min_volume, with_prices=True, px_agg=args.agg)
     except (rules.RuleError, ValueError, KeyError) as exc:
         raise SystemExit(str(exc)) from exc
     threshold = args.threshold if args.threshold is not None else rules.flag_threshold(rule)
@@ -295,7 +297,7 @@ def main() -> None:
     print(f"Loading bundle: {zip_path.name}  (rule={args.rule}, "
           f"z_window={args.z_window}h, entry>{threshold}, exit<{exit_band}, "
           f"max_hold={args.max_hold}h, cost={args.cost}, size={args.size}, "
-          f"min_volume={args.min_volume})")
+          f"min_volume={args.min_volume}, agg={args.agg})")
     trades = simulate(panel, roles, rule, threshold, exit_band,
                       args.max_hold, args.cost, args.size)
     baseline = random_baseline(panel, roles, rule, max(len(trades) * 5, 100),
@@ -313,7 +315,7 @@ def main() -> None:
         "params": {"z_window": args.z_window, "threshold": threshold,
                    "exit_band": exit_band, "max_hold": args.max_hold,
                    "cost": args.cost, "size": args.size,
-                   "min_volume": args.min_volume, "seed": args.seed},
+                   "min_volume": args.min_volume, "agg": args.agg, "seed": args.seed},
         **stats,
     }
     json_path = OUT_DIR / f"{args.rule}_backtest.json"

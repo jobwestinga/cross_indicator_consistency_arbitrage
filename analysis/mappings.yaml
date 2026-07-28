@@ -182,7 +182,7 @@ rules:
         market_name: "JOLTS"
         fred_series: "JTSJOL"
         direction: "higher = more vacancies priced"
-        settlement: {kind: level, series: JTSJOL, scale: 0.001, ref_lag_months: 2, caution: "JOLTS initial-print revisions are large; pin evidence preferred"}
+        settlement: {kind: level, series: JTSJOL, scale: 0.001, ref_lag_months: 2}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"
@@ -248,7 +248,7 @@ rules:
         market_name: "US Payroll Employment"
         fred_series: "PAYEMS"
         direction: "higher = stronger labor demand priced"
-        settlement: {kind: mom_diff, series: PAYEMS, scale: 1000, ref_lag_months: 1, caution: "FRED holds revised payrolls; venue settles the initial print"}
+        settlement: {kind: mom_diff, series: PAYEMS, scale: 1000, ref_lag_months: 1}
       labor:
         market_name: "US Unemployment Rate"
         fred_series: "UNRATE"

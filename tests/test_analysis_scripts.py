@@ -555,3 +555,52 @@ def test_cached_implied_series_roundtrip(bundle: Path, tmp_path: Path, monkeypat
     # different params -> different cache entry
     sig.cached_implied_series(bundle, h, m, "US Core CPI", roll_days=3)
     assert len(list((tmp_path / "cache").glob("*.pkl"))) == 2
+
+
+# --------------------------------------------------------------------------- #
+# unit + smoke: A5 vwap agg, C4 quantiles + unit spreads, A7 vintages
+# --------------------------------------------------------------------------- #
+def test_ladder_quantile_levels():
+    strikes = np.array([2.0, 3.0, 4.0])
+    surv = np.array([0.9, 0.5, 0.1])
+    assert sig._ladder_quantile(strikes, surv, 0.5) == pytest.approx(3.0)
+    # p25 of X = survival crossing 0.75 -> between 2 and 3
+    assert sig._ladder_quantile(strikes, surv, 0.75) == pytest.approx(2.375)
+    assert sig._ladder_quantile(strikes, surv, 0.25) == pytest.approx(3.625)
+
+
+def test_implied_prob_frame_vwap_matches_last_on_uniform_volume(bundle: Path):
+    h = sig.load_history(bundle, use_cache=False)
+    m = sig.load_markets(bundle)
+    last = sig.implied_prob_frame(h, m, "US Core CPI", agg="last")
+    vwap = sig.implied_prob_frame(h, m, "US Core CPI", agg="vwap")
+    # synthetic bundle: one print/hour, volume 10 everywhere -> identical
+    both = last.join(vwap, lsuffix="_l", rsuffix="_v").dropna()
+    assert len(both) > 100
+    assert (both["value_l"] - both["value_v"]).abs().max() < 1e-9
+
+
+def test_unit_spreads_graceful_on_synthetic(bundle: Path, out_dir: Path):
+    # synthetic bundle lacks the headline/PCE markets -> pairs FAIL but the
+    # script must still exit 0 and write a summary
+    r = _run("unit_spreads.py", "--zip", str(bundle), out=out_dir)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((out_dir / "unit_spreads" / "summary.json").read_text())
+    assert {x["pair"] for x in out["results"]} == {"core_headline", "pce_cpi"}
+
+
+def test_fred_initial_vintage_loader(tmp_path):
+    db = tmp_path / "fred.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE macro_observations (series_id TEXT, label TEXT, mapping TEXT,"
+            " obs_date TEXT, value REAL, realtime_start TEXT, realtime_end TEXT,"
+            " fetched_at TEXT, value_initial REAL, initial_release_date TEXT)")
+        conn.executemany(
+            "INSERT INTO macro_observations VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [("X", "x", "m", "2026-01-01", 100.0, None, None, "t", 90.0, "2026-02-05"),
+             ("X", "x", "m", "2026-02-01", 110.0, None, None, "t", None, None)])
+    latest = sig.load_fred_series("X", db=db)
+    initial = sig.load_fred_series("X", db=db, vintage="initial")
+    assert latest.tolist() == [100.0, 110.0]
+    assert initial.tolist() == [90.0, 110.0]     # falls back where no vintage

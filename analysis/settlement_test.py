@@ -8,12 +8,18 @@ proposes: on a flag, take the front reference contract of each leg and HOLD IT
 TO SETTLEMENT. No exits, no rolls, no stitching — the position is a real
 contract whose PnL is settlement value minus entry price.
 
-Settlement determination is model-free: a resolved YES contract pins to ~0 or
-~1 by expiration in `contract_history` itself. The last print at/near expiry
-decides the outcome (must be <= pin_band or >= 1-pin_band, else the contract
-is counted "unpinned" and excluded). Contracts expiring after the bundle ends
-are "unresolved" and excluded. No FRED mapping is needed, so no vintage
-issues (A7) can leak in.
+Settlement determination, in priority order:
+  1. FRED mapping (mappings.yaml `settlement:` blocks) on INITIAL-RELEASE
+     vintages (A7) with venue-consistent bases (NSA CPI) — trading halts
+     BEFORE the release, so this is the actual settlement rule; a pinned
+     last price is only the market's pre-release expectation and a surprise
+     print flips it.
+  2. price pin (last print near expiry at <= pin_band or >= 1-pin_band) and
+     survival-ladder inference from pinned siblings — for unmapped markets
+     (NBER recession, GDP with ambiguous timing).
+Contracts expiring after the bundle ends are "unresolved" and excluded.
+Legs where FRED and a pin both resolve but DISAGREE are counted
+(fred_pin_disagree): release surprises plus any residual mapping errors.
 
 Costs: entry crossing only (`--cost` is per leg, ONE-WAY). Settlement pays
 exactly 0/1 with no exit spread — that is the main structural advantage of
@@ -87,10 +93,9 @@ class FredResolver:
     """Resolve realized outcomes from the FRED sqlite per the indicator's
     `settlement:` spec in mappings.yaml (see the spec comment there).
 
-    Values are the LATEST FRED vintage; for series with material initial-print
-    revisions (payrolls) the spec carries a `caution` note and the pin
-    cross-check below is the guard: where both FRED and a pinned price decide
-    the same contract, disagreement is counted and reported.
+    Values are the INITIAL-RELEASE vintage where collected (A7, falling back
+    to the latest revision) — the venue settles on the announcement, and
+    revisions (payrolls, JOLTS) can flip outcomes near a strike.
     """
 
     def __init__(self) -> None:
@@ -99,7 +104,8 @@ class FredResolver:
     def _series(self, series_id: str) -> pd.Series | None:
         if series_id not in self._cache:
             try:
-                self._cache[series_id] = sig.load_fred_series(series_id)
+                self._cache[series_id] = sig.load_fred_series(series_id,
+                                                              vintage="initial")
             except Exception:  # noqa: BLE001 - sqlite missing/series absent -> no FRED
                 self._cache[series_id] = pd.Series(dtype=float)
         s = self._cache[series_id]
@@ -189,23 +195,27 @@ def settlement_with_ladder(history: pd.DataFrame, conid: int,
 
 def resolve_leg(history: pd.DataFrame, conid: int, spec: dict | None,
                 resolver: FredResolver, pin_band: float) -> tuple[float | None, str, int]:
-    """One contract's settlement: FRED mapping first, price-pin/ladder as
-    fallback. Returns (value, status, fred_pin_disagree 0/1) — the third field
-    counts cases where FRED and an independent price pin BOTH resolve the
-    contract and disagree (mapping/revision guard, reported in the summary)."""
+    """One contract's settlement: FRED-INITIAL mapping first, price-pin/ladder
+    only for unmapped markets.
+
+    Why FRED outranks the pin: trading halts BEFORE the release, so a pinned
+    last price is the market's pre-release expectation, not the outcome — a
+    surprise print flips it (seen live: April JOLTS pinned 0.05 at strike 7.4,
+    initial print 7.618M -> settled YES). With initial-release vintages (A7)
+    and venue-consistent bases (NSA CPI), the FRED mapping IS the settlement
+    rule. The returned disagree flag (both resolve, differ) therefore counts
+    SURPRISES + residual mapping errors; inspect if it grows.
+    """
     rows = history.loc[history.conid == conid]
     strike = rows["strike"].iloc[-1] if len(rows) else np.nan
     exp = rows["expiration"].iloc[-1] if len(rows) else pd.NaT
     fred_val, fred_status = resolver.outcome(spec, strike, exp)
     pin_val, pin_status = settlement_with_ladder(history, conid, pin_band=pin_band)
-    # PIN OUTRANKS FRED: a pinned venue price is direct settlement evidence,
-    # while FRED holds revised values on a possibly different basis (SA vs
-    # NSA, later vintages). FRED only fills contracts the venue left mid-range.
-    if pin_val is not None:
-        disagree = int(fred_status == "settled_fred" and fred_val != pin_val)
-        return pin_val, pin_status, disagree
     if fred_status == "settled_fred":
-        return fred_val, fred_status, 0
+        disagree = int(pin_val is not None and pin_val != fred_val)
+        return fred_val, fred_status, disagree
+    if pin_val is not None:
+        return pin_val, pin_status, 0
     # neither settled: prefer the more informative reason
     status = pin_status if fred_status in ("unmapped", "fred_error") else fred_status
     return None, status, 0
@@ -303,8 +313,9 @@ def run_rule(rule_key: str, zip_path: Path, z_window: int, cost: float,
     print(f"  flags: {out['n_flags']}   fully settled: {out['n_settled']}   "
           f"excluded (unresolved/unpinned/stale legs): {out['n_unresolved']}")
     if disagreements:
-        print(f"  WARNING: FRED settlement disagrees with a pinned price on "
-              f"{disagreements} leg(s) - check the mapping/revisions before trusting.")
+        print(f"  note: FRED settlement differs from the pre-release pin on "
+              f"{disagreements} leg(s) - release surprises (or mapping errors; "
+              f"inspect if this grows).")
     if len(settled):
         net = settled["net"].to_numpy()
         out.update({

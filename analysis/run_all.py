@@ -48,6 +48,7 @@ DISC_DIR = OUT_BASE / "discovery"
 SETTLE_DIR = OUT_BASE / "settlement"
 FACTOR_DIR = OUT_BASE / "factor"
 REGIONAL_DIR = OUT_BASE / "regional_cpi"
+UNITS_DIR = OUT_BASE / "unit_spreads"
 RELEASE_DIR = OUT_BASE / "releases"
 DEFAULT_OOS_SPLIT = "2026-05-01"
 
@@ -318,7 +319,28 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
     else:
         lines.append("_no regional results (run regional_cpi_check.py)_")
 
-    lines += ["", "### 4c. Do inconsistencies close at releases? (D4)", ""]
+    lines += ["", "### 4c. Inflation wedges in units (C4)", ""]
+    us = _load_json(UNITS_DIR / "summary.json")
+    if us:
+        for r in us.get("results", []):
+            if "failed" in r:
+                continue
+            band = r.get("realized_band_p5_p95", ["-", "-"])
+            lines.append(
+                f"- {r['pair']}: implied wedge mean "
+                f"{_fmt(r.get('implied_wedge_mean'), '+.2f')}pp, range "
+                f"[{_fmt(r.get('implied_wedge_min'), '+.2f')}, "
+                f"{_fmt(r.get('implied_wedge_max'), '+.2f')}] vs realized "
+                f"[{band[0]}, {band[1]}]; outside band "
+                f"{_fmt(100 * r.get('frac_outside_band', float('nan')), '.1f')}% "
+                f"of bars, persistent runs: {r.get('n_persistent_runs', '-')}")
+        lines.append("")
+        lines.append("Wedges inside the realized band = coherent pricing in units; "
+                     "only persistent excursions are candidate mispricings.")
+    else:
+        lines.append("_no unit-spread results (run unit_spreads.py)_")
+
+    lines += ["", "### 4d. Do inconsistencies close at releases? (D4)", ""]
     rel = _load_json(RELEASE_DIR / "summary.json")
     if rel:
         any_compress = any((r.get("verdict") or "").startswith("RELEASES")
@@ -500,6 +522,9 @@ def main() -> None:
         print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
         print("release event study ...", flush=True)
         rc, tail = _run("release_event_study.py", *zip_arg)
+        print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
+        print("unit-space spreads ...", flush=True)
+        rc, tail = _run("unit_spreads.py", *zip_arg)
         print(f"  -> {'ok' if rc == 0 else 'FAILED: ' + tail}")
 
     REPORT_DIR.mkdir(exist_ok=True)
