@@ -51,6 +51,7 @@ REGIONAL_DIR = OUT_BASE / "regional_cpi"
 UNITS_DIR = OUT_BASE / "unit_spreads"
 RELEASE_DIR = OUT_BASE / "releases"
 DEFAULT_OOS_SPLIT = "2026-05-01"
+MIN_EVENTS_FOR_FDR = 8   # same floor validate_consistency uses for INCONCLUSIVE
 
 
 def _bh_qvalues(pvals: dict[str, float]) -> dict[str, float]:
@@ -154,12 +155,21 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         lines.append("_scan did not produce output_")
     lines += ["", "## 2. Consistency rules (cross-market economic identities)", ""]
 
+    # Only rules with enough events enter the FDR family. A permutation p on
+    # 2 events is noise, and running BH over it manufactures a significant-
+    # looking q (observed: pce_cpi p=0.005 -> q=0.045 on 2 events) that would
+    # be read straight off the headline table.
     perm_ps = {}
+    underpowered = set()
     for rule_key, status in rule_status.items():
-        if status == "ok":
-            v = _load_json(VALIDATION_DIR / f"{rule_key}_validation.json")
-            perm_ps[rule_key] = ((v or {}).get("permutation") or {}).get(
-                "p_value", float("nan")) or float("nan")
+        if status != "ok":
+            continue
+        v = _load_json(VALIDATION_DIR / f"{rule_key}_validation.json")
+        p = ((v or {}).get("permutation") or {}).get("p_value", float("nan"))
+        if ((v or {}).get("n_events") or 0) < MIN_EVENTS_FOR_FDR:
+            underpowered.add(rule_key)
+            continue
+        perm_ps[rule_key] = p if p is not None else float("nan")
     qvals = _bh_qvalues(perm_ps)
 
     header = ("| rule | status | events | validation verdict | %rev@24h | mean_rev vs matched | "
@@ -175,6 +185,8 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         mean_rev = _fmt(v24.get("mean_rev"), ".2f")
         matched = _fmt(v24.get("matched_mean"), ".2f")
         perm_p = _fmt(((v or {}).get("permutation") or {}).get("p_value"), ".3f")
+        if rule_key in underpowered:        # n < MIN_EVENTS_FOR_FDR -> not testable
+            perm_p = f"{perm_p} (n/a)"
         lines.append(
             f"| {rule_key} | ok | {(v or {}).get('n_events', '-')} "
             f"| {(v or {}).get('overall', '-').split(' (')[0]} "
@@ -193,7 +205,9 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
         "*perm p = circular-shift permutation test (each leg's own dynamics kept,",
         "cross-leg alignment destroyed); the strictest null available here. BH q =",
         "Benjamini-Hochberg adjusted across the rules tested (A8): the multiple-",
-        "testing-honest version of perm p.",
+        "testing-honest version of perm p. Rules with <8 events are marked (n/a)",
+        "and excluded from the FDR family: a permutation p on 2 events is noise,",
+        "and running BH over it manufactures a significant-looking q.",
         "",
         "### 2b. Hold-to-settlement construction (no rolls, no marks at exit)",
         "",
@@ -241,6 +255,10 @@ def build_report(zip_path: Path, rule_status: dict[str, str], readiness: str,
             if "failed" in r:
                 lines.append(f"| {r['rule']} | - | FAILED: {r['failed'][:40]} "
                              f"| - | - | - | - | - |")
+                continue
+            if not r.get("has_oos_data", True):
+                lines.append(f"| {r['rule']} | - | NO OOS DATA (leg stale "
+                             f"{str(r.get('panel_end', ''))[:10]}) | - | - | - | - | - |")
                 continue
             b = r.get("backtest", {})
             be = b.get("breakeven_cost_per_leg")

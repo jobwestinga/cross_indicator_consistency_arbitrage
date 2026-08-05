@@ -604,3 +604,93 @@ def test_fred_initial_vintage_loader(tmp_path):
     initial = sig.load_fred_series("X", db=db, vintage="initial")
     assert latest.tolist() == [100.0, 110.0]
     assert initial.tolist() == [90.0, 110.0]     # falls back where no vintage
+
+
+def test_oos_reports_no_oos_data_when_panel_ends_before_split(bundle: Path, out_dir: Path):
+    """A rule whose panel ends before the split must be reported as NO OOS DATA,
+    not 'too few events' (a stale leg is a data problem, not a null result)."""
+    r = _run("oos_test.py", "--zip", str(bundle), "--rules", "phillips",
+             "--split", "2030-01-01", "--z-window", "12", "--horizons", "1", "4",
+             out=out_dir)
+    assert r.returncode == 0, r.stderr
+    res = json.loads((out_dir / "oos" / "summary.json").read_text())["results"][0]
+    assert res["has_oos_data"] is False
+    assert res["oos_days"] == 0.0          # never negative
+    assert res["overall"].startswith("NO OOS DATA")
+
+
+def test_check_readiness_reports_rule_legs(bundle: Path, tmp_path: Path):
+    fred = tmp_path / "fred.sqlite"
+    _make_fred(fred)
+    r = _run("check_readiness.py", "--zip", str(bundle), "--fred", str(fred))
+    assert r.returncode in (0, 1), r.stderr
+    assert "Rule legs" in r.stdout
+    # synthetic bundle carries the two phillips legs; both should be listed
+    assert "US Core CPI" in r.stdout and "US Unemployment Rate" in r.stdout
+
+
+# --------------------------------------------------------------------------- #
+# unit: expiry_mode=active (causal most-traded expiry)
+# --------------------------------------------------------------------------- #
+def _expiry_frame(rows):
+    df = pd.DataFrame(rows, columns=["ts_utc", "expiration", "conid", "avg"])
+    df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
+    df["expiration"] = pd.to_datetime(df["expiration"], utc=True)
+    return df
+
+
+def test_active_expiry_prefers_the_traded_expiry():
+    """Front expiry prints once; a later expiry prints heavily -> active mode
+    must track the later one, and must never mix the two at one timestamp."""
+    rows = [["2026-04-01 00:00", "2026-04-20", 1, 0.5]]
+    for i in range(20):                       # far expiry is where trading is
+        rows.append([f"2026-04-01 {i:02d}:00", "2026-06-20", 2, 0.4])
+    df = _expiry_frame(rows)
+    out = sig.active_expiry_filter(df, roll_days=2)
+    # CAUSAL: at the first bar both expiries have one print -> tie -> nearest.
+    # Only once the far expiry has out-printed it does the tracker switch.
+    assert out.loc[out.ts_utc == out.ts_utc.min(), "conid"].tolist() == [1]
+    assert set(out.loc[out.ts_utc > out.ts_utc.min(), "conid"]) == {2}
+    front = sig.front_expiry_filter(df, roll_days=2)
+    assert set(front["conid"]) == {1}         # front mode keeps the quiet one
+    # one expiry per timestamp in both modes (the A1 invariant)
+    for frame in (out, front):
+        assert (frame.groupby("ts_utc")["expiration"].nunique() <= 1).all()
+
+
+def test_active_expiry_survives_all_na_rows():
+    """Bars where no eligible expiry printed in the window must be dropped,
+    not raise (pandas idxmax errors on an all-NA row)."""
+    df = _expiry_frame([
+        ["2026-04-01 00:00", "2026-04-02", 1, 0.5],   # rolls out immediately
+        ["2026-04-10 00:00", "2026-04-02", 1, 0.5],   # after its own expiry
+    ])
+    out = sig.active_expiry_filter(df, roll_days=2)   # must not raise
+    assert len(out) == 0
+
+
+def test_active_expiry_ties_go_to_nearest():
+    df = _expiry_frame([
+        ["2026-04-01 00:00", "2026-05-20", 1, 0.5],
+        ["2026-04-01 00:00", "2026-06-20", 2, 0.4],
+    ])
+    out = sig.active_expiry_filter(df, roll_days=2)
+    assert set(out["conid"]) == {1}
+
+
+def test_expiry_mode_reaches_the_rule_panel(bundle: Path):
+    a, _, _ = rules.build_rule_panel("phillips", bundle, z_window=12,
+                                     expiry_mode="active")
+    f, _, _ = rules.build_rule_panel("phillips", bundle, z_window=12,
+                                     expiry_mode="front")
+    assert len(a) > 0 and len(f) > 0
+
+
+def test_collect_fred_redacts_api_key():
+    """requests embeds the api_key in HTTPError messages; nothing we print may
+    contain it (logs / CI output / pasted transcripts)."""
+    cf = _load_collect_fred()
+    key = "a" * 32
+    msg = f"400 Client Error for url: https://api.stlouisfed.org/x?api_key={key}&f=json"
+    out = cf.redact(msg, key)
+    assert key not in out and "***" in out

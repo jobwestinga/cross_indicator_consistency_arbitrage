@@ -37,6 +37,7 @@ outage Jun 4–12 2026) and is empty for some markets.
 | `regional_cpi_check.py` | B10: national CPI yoy vs BLS-weighted census-region CPI markets (levels → yoy via FRED bases). Accounting identity. |
 | `release_event_study.py` | D4: does \|score\| compress at macro releases (leg-market expiration days) vs random times? Mechanism evidence. |
 | `unit_spreads.py` | C4: implied inflation wedges (headline−core, PCE−CPI) in %-points from ladder quantiles, vs the realized 10y band. |
+| `expiry_mode_ab.py` | A13 decision harness: front vs active expiry tracking, side by side (coverage, events, verdict, perm p, switch count). |
 | `arbitrage_scan.py` | Model-free within-market checks: ladder monotonicity, YES/NO parity, persistence. |
 | `fed_path_check.py` | Same-event identity: Fed Decision (categorical) vs Fed Funds ladder at the same meeting. |
 | `discover_rules.py` | Pair mining: 6h-change correlations, Bonferroni screen, OOS confirmation, YAML stubs. |
@@ -160,6 +161,50 @@ Pooled post/pre |score| ratio 0.99; NO rule shows release-specific
 compression. Inconsistencies decay on their own clock — mechanism evidence
 AGAINST "the data release resolves a real mispricing" and FOR
 signal-construction noise. Consistent with the ref-roll backtest result.
+
+## Expiry tracking: measured, deliberately unchanged (2026-08-03)
+
+`front` mode keeps only the nearest unexpired expiry and so discards **52–96%
+of prints** (US Real GDP 269 rows → 10, which is why `okun` never scored; Fed
+Funds keeps 17%). `active_expiry_filter` + `expiry_mode: front|active` tracks
+the most-traded unexpired expiry instead — causal, one expiry per bar so A1
+holds — and recovers most of it (GDP 10 → 258 points, Recession's series
+extends Jun-26 → Jul-17).
+
+**We did not adopt it.** `analysis/expiry_mode_ab.py` shows `active` raises
+expiry switches 4–5× (taylor 10 → 59) and moves verdicts *incoherently*:
+taylor's genuine cross-leg structure evaporates (perm p 0.007 → 0.847) while
+payrolls_labor swings to 0.000 and core_headline 0.160 → 0.687. Expiry rolls
+are **synchronised across legs** (both CPI legs roll on the same release), so
+cross-leg-aligned jumps inflate significance in a way the circular-shift null
+cannot reproduce — the A11 hazard at panel scale. `front` stays the default;
+re-run the A/B as data accrues.
+
+## Dead legs: four rules have no live OOS window (found 2026-07-28)
+
+`check_readiness.py` now audits **rule legs** — the last print of every market
+a rule depends on — because a leg that stops printing silently produces "no
+events", which the OOS table used to report as "too few events" (a null
+result) rather than "no data" (a broken input). Current state:
+
+| leg market | last print vs data end | rules affected |
+|---|---|---|
+| US Core PCE Price Index | 120d | pce_cpi |
+| US Real GDP | 93d | okun |
+| JOLTS | 19d | beveridge |
+| US Recession | 7d | sahm |
+| US Dollar to Japanese Yen | 7d | uip |
+
+**Verified against the live VPS database (2026-07-28): this is not a
+collector failure and not a delisting.** Those markets are actively listed
+with fresh contracts — US Core PCE had 78 ACTIVE contracts upstream, every
+single one returning `no_data`; USDJPY 60 of 68; JOLTS 57 of 70. The venue
+lists contracts that never trade. The bundle only shows history-backed
+contracts, so "0 traded contracts" in the readiness output means *nothing
+printed*, not *nothing listed*.
+
+Consequence: `oos_test.py` reports these as **NO OOS DATA (leg stale …)**,
+and 5 of 10 rules — not 10 — actually have a live OOS window to grow into.
 
 ## Known limitations
 

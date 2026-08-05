@@ -103,6 +103,7 @@ def build_rule_panel(
     history: pd.DataFrame | None = None,
     markets: pd.DataFrame | None = None,
     px_agg: str = "last",
+    expiry_mode: str | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """Aligned panel for one rule: implied series per role, causal z-scores,
     inconsistency score. Warmup rows (z NaN) are dropped.
@@ -123,6 +124,7 @@ def build_rule_panel(
     freq = defaults["resample_freq"]
     ffill_limit = int(defaults.get("ffill_limit", sig.DEFAULT_FFILL_LIMIT))
     roll_days = int(defaults.get("roll_days", sig.DEFAULT_ROLL_DAYS))
+    expiry_mode = expiry_mode or defaults.get("expiry_mode", "front")
     kind = kind or rule.get("signal", "median")
 
     if markets is None:
@@ -134,15 +136,16 @@ def build_rule_panel(
     cols: dict[str, pd.Series] = {}
     for role, spec in rule["indicators"].items():
         role_kind = spec.get("signal", kind)
+        role_expiry = spec.get("expiry_mode", expiry_mode)
         cols[role] = sig.cached_implied_series(
             zip_path, history, markets, spec["market_name"], kind=role_kind,
             band=band, freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
-            min_volume=min_volume)
+            min_volume=min_volume, expiry_mode=role_expiry)
         if with_prices:
             frame = sig.cached_implied_prob_frame(
                 zip_path, history, markets, spec["market_name"], band=band,
                 freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
-                min_volume=min_volume, agg=px_agg)
+                min_volume=min_volume, agg=px_agg, expiry_mode=role_expiry)
             cols[f"px_{role}"] = frame["value"]
             cols[f"pxref_{role}"] = frame["ref_conid"]
 

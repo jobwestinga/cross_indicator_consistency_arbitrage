@@ -385,6 +385,8 @@ def main() -> None:
     ap.add_argument("--zip", type=Path, default=None)
     ap.add_argument("--signal", choices=["median", "prob"], default=None,
                     help="implied signal override (default: rule's 'signal' key, else median)")
+    ap.add_argument("--expiry-mode", choices=["front", "active"], default=None,
+                    help="expiry tracked per bar (default: mappings defaults.expiry_mode)")
     ap.add_argument("--z-window", type=int, default=48, help="trailing z-score window (hours)")
     ap.add_argument("--threshold", type=float, default=None,
                     help="flag threshold (default: from mappings logic.flag)")
@@ -404,7 +406,8 @@ def main() -> None:
 
     try:
         panel, roles, rule = rules.build_rule_panel(
-            args.rule, zip_path, args.z_window, kind=args.signal)
+            args.rule, zip_path, args.z_window, kind=args.signal,
+            expiry_mode=args.expiry_mode)
     except (rules.RuleError, ValueError, KeyError) as exc:
         raise SystemExit(str(exc)) from exc
     metric = rules.flag_metric(rule)
@@ -450,7 +453,7 @@ def main() -> None:
         "bundle": zip_path.name,
         "params": {"z_window": args.z_window, "threshold": threshold,
                    "metric": metric, "horizons": args.horizons, "min_gap": min_gap,
-                   "seed": args.seed},
+                   "expiry_mode": args.expiry_mode or "front", "seed": args.seed},
         "window_days": round(window_days, 1),
         "n_events": result["n_events"],
         "overall": result["overall"],

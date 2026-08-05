@@ -65,6 +65,17 @@ def oos_one_rule(rule_key: str, zip_path: Path, split: pd.Timestamp, z_window: i
     result = vc.summarize(f"{rule_key} [OOS >= {split.date()}]",
                           flagged, rand, matched, horizons, rng)
 
+    # A rule whose panel ENDS BEFORE the split has no OOS window at all: one of
+    # its legs stopped printing. That is a data problem, not "too few events" —
+    # report it as such so the table cannot be misread (check_readiness's
+    # "Rule legs" section names the stale market).
+    panel_end = score.index.max()
+    if panel_end < split:
+        result["overall"] = (f"NO OOS DATA (panel ends {panel_end.date()}, "
+                             f"leg went stale before the split)")
+        print(f"  NO OOS DATA: score panel ends {panel_end.date()}, "
+              f"before the {split.date()} split — a leg stopped printing.")
+
     # frozen-parameter backtest, OOS trades only
     trades = bt.simulate(panel, roles, rule, threshold, threshold / 2,
                          max_hold=max(horizons), cost=cost, size="fixed")
@@ -87,11 +98,13 @@ def oos_one_rule(rule_key: str, zip_path: Path, split: pd.Timestamp, z_window: i
     else:
         print("  OOS backtest: no trades in the OOS window")
 
-    oos_days = (score.index.max() - max(split, score.index.min())).total_seconds() / 86400
+    oos_days = max(0.0, (panel_end - max(split, score.index.min())).total_seconds() / 86400)
     return {
         "rule": rule_key,
         "split": str(split.date()),
         "oos_days": round(oos_days, 1),
+        "panel_end": str(panel_end),
+        "has_oos_data": bool(panel_end >= split),
         "params": {"z_window": z_window, "threshold": threshold, "metric": metric,
                    "horizons": horizons, "min_gap": min_gap, "cost": cost,
                    "seed": seed},
@@ -152,6 +165,10 @@ def main() -> None:
             print(f"{r['rule']:16} FAILED: {r['failed'][:50]}")
             continue
         b = r["backtest"]
+        if not r.get("has_oos_data", True):
+            print(f"{r['rule']:16} {'-':>6} {'NO OOS DATA (leg stale ' + r['panel_end'][:10] + ')':32} "
+                  f"{'-':>6} {'-':>10} {'-':>8}")
+            continue
         print(f"{r['rule']:16} {r['n_events_oos']:>6} {r['overall'][:32]:32} "
               f"{b.get('n_trades', 0):>6} "
               f"{b.get('mean_net_per_trade', float('nan')):>+10.4f} "

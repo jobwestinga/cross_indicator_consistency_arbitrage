@@ -52,6 +52,7 @@ DEFAULT_FREQ = "1h"
 DEFAULT_FFILL_LIMIT = 48      # bars on the resampled grid (= 48h at 1h)
 DEFAULT_ROLL_DAYS = 2         # stop tracking an expiry this many days before it settles
 REF_ACTIVITY_WINDOW = "7D"    # trailing window for causal reference-contract choice
+EXPIRY_ACTIVITY_WINDOW = "7D" # trailing window for causal most-active-expiry choice
 
 HISTORY_COLS = ["underlying_conid", "market_name", "conid", "side", "strike",
                 "expiration", "ts_utc", "avg", "volume", "chart_step"]
@@ -127,21 +128,86 @@ def front_expiry_filter(sub: pd.DataFrame, roll_days: int = DEFAULT_ROLL_DAYS) -
     (prices collapsing to 0/1 right before resolution).
     """
     exps = pd.DatetimeIndex(sub["expiration"].dropna().unique()).sort_values()
-    if len(exps) <= 1:
+    if len(exps) == 0:
         return sub
     cut_i8 = (exps - pd.Timedelta(days=roll_days)).asi8
     ts_i8 = pd.DatetimeIndex(sub["ts_utc"]).asi8
     idx = np.searchsorted(cut_i8, ts_i8, side="right")  # ts==cutoff -> already rolled
-    valid = idx < len(exps)
+    valid = idx < len(exps)     # past the last cutoff -> everything has rolled
     front_i8 = exps.asi8[np.minimum(idx, len(exps) - 1)]
     exp_i8 = pd.DatetimeIndex(sub["expiration"]).asi8
     return sub[valid & (exp_i8 == front_i8)]
 
 
+def active_expiry_filter(sub: pd.DataFrame, roll_days: int = DEFAULT_ROLL_DAYS,
+                         window: str = EXPIRY_ACTIVITY_WINDOW) -> pd.DataFrame:
+    """Keep rows of the MOST ACTIVELY TRADED unexpired expiry at each timestamp.
+
+    Motivation (measured 2026-08-03): `front_expiry_filter` keeps only the
+    nearest unexpired expiry, which on this venue discards 52-96% of prints —
+    US Real GDP drops 269 rows to 10 (killing `okun`), Fed Funds keeps 17%.
+    Traders concentrate in a non-front contract, and a front expiry that goes
+    quiet mid-life kills the signal even while a later expiry trades actively.
+
+    This selects, at each timestamp, the eligible expiry (not yet inside its
+    `roll_days` buffer) with the most prints in the trailing `window`. It is:
+      - CAUSAL: trailing counts only, no future liquidity information [A4];
+      - NON-MIXING: exactly one expiry per timestamp, so the A1 expiry-mixing
+        bug cannot reappear;
+      - ties -> the nearest expiry, so it degrades to front-expiry behaviour
+        when activity is uniform.
+
+    CAVEAT: like the reference-contract switch in `implied_prob_frame` [A11],
+    switching expiry JUMPS the series — a September-CPI median measures a
+    different reference month than August's. Use `tracked_expiry_series` to
+    get the tracked expiry per bar and treat switches as roll boundaries.
+    """
+    exps = pd.DatetimeIndex(sub["expiration"].dropna().unique()).sort_values()
+    if len(exps) == 0:
+        return sub
+    counts = sub.pivot_table(index="ts_utc", columns="expiration",
+                             values="avg", aggfunc="size").reindex(columns=exps)
+    activity = counts.rolling(window, min_periods=1).sum()
+    # eligibility: the expiry's roll cutoff must still be ahead of the bar
+    cut = (exps - pd.Timedelta(days=roll_days)).asi8
+    ts_i8 = pd.DatetimeIndex(activity.index).asi8
+    eligible = ts_i8[:, None] < cut[None, :]
+    masked = activity.where(eligible)
+    # bars where NO eligible expiry printed inside the window have nothing to
+    # track; drop them first (idxmax raises on an all-NA row).
+    masked = masked.dropna(how="all")
+    if masked.empty:
+        return sub.iloc[0:0]
+    chosen = masked.idxmax(axis=1)          # ties -> first (nearest) expiry
+    pick = sub["ts_utc"].map(chosen)
+    return sub[pick.notna() & (sub["expiration"] == pick)]
+
+
+def tracked_expiry_series(history: pd.DataFrame, markets: pd.DataFrame,
+                          market_name: str, expiry_mode: str = "front",
+                          band: tuple[float, float] = DEFAULT_BAND,
+                          freq: str = DEFAULT_FREQ,
+                          ffill_limit: int = DEFAULT_FFILL_LIMIT,
+                          roll_days: int = DEFAULT_ROLL_DAYS,
+                          min_volume: int = 0) -> pd.Series:
+    """Which expiry the signal tracks per bar (roll-boundary diagnostics)."""
+    sub = _prepare_market(history, markets, market_name, band, roll_days,
+                          min_volume, expiry_mode=expiry_mode)
+    exp = sub.set_index("ts_utc")["expiration"]
+    exp = exp[~exp.index.duplicated(keep="last")].sort_index()
+    return exp.resample(freq).last().ffill(limit=ffill_limit).rename(market_name)
+
+
 def _prepare_market(history: pd.DataFrame, markets: pd.DataFrame, market_name: str,
                     band: tuple[float, float], roll_days: int,
-                    min_volume: int) -> pd.DataFrame:
-    """Common preamble: one market's YES rows, band-filtered, front expiry only."""
+                    min_volume: int, expiry_mode: str = "front") -> pd.DataFrame:
+    """Common preamble: one market's YES rows, band-filtered, one expiry per bar.
+
+    expiry_mode="front"  -> nearest unexpired expiry (default, A1 behaviour)
+    expiry_mode="active" -> most-actively-traded unexpired expiry (causal)
+    """
+    if expiry_mode not in ("front", "active"):
+        raise ValueError(f"unknown expiry_mode {expiry_mode!r} (use 'front' or 'active')")
     conid = resolve_conid(markets, market_name)
     sub = history[(history.underlying_conid == conid) & (history.side == "Y")]
     if min_volume > 0:
@@ -151,9 +217,10 @@ def _prepare_market(history: pd.DataFrame, markets: pd.DataFrame, market_name: s
     if sub.empty:
         raise ValueError(f"no usable YES contract_history for {market_name!r} "
                          f"(band={band}, min_volume={min_volume})")
-    sub = front_expiry_filter(sub, roll_days)
+    sub = (front_expiry_filter(sub, roll_days) if expiry_mode == "front"
+           else active_expiry_filter(sub, roll_days))
     if sub.empty:
-        raise ValueError(f"no front-expiry observations for {market_name!r}")
+        raise ValueError(f"no {expiry_mode}-expiry observations for {market_name!r}")
     return sub
 
 
@@ -177,6 +244,7 @@ def implied_prob_frame(
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
     agg: str = "last",
+    expiry_mode: str = "front",
 ) -> pd.DataFrame:
     """Front-expiry implied probability from one reference contract, plus the
     reference conid per bar.
@@ -198,7 +266,8 @@ def implied_prob_frame(
     """
     if agg not in ("last", "vwap"):
         raise ValueError(f"unknown agg {agg!r} (use 'last' or 'vwap')")
-    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume)
+    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume,
+                          expiry_mode=expiry_mode)
     px = sub.pivot_table(index="ts_utc", columns="conid", values="avg", aggfunc="last")
     activity = px.notna().rolling(REF_ACTIVITY_WINDOW).sum()
     ref_col = activity.to_numpy().argmax(axis=1)          # ties -> lowest conid
@@ -233,11 +302,12 @@ def implied_prob_series(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    expiry_mode: str = "front",
 ) -> pd.Series:
     """implied_prob_frame's `value` column as a named Series (signal use)."""
     frame = implied_prob_frame(history, markets, market_name, band=band, freq=freq,
                                ffill_limit=ffill_limit, roll_days=roll_days,
-                               min_volume=min_volume)
+                               min_volume=min_volume, expiry_mode=expiry_mode)
     return frame["value"].rename(market_name)
 
 
@@ -277,6 +347,7 @@ def implied_quantile_series(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    expiry_mode: str = "front",
 ) -> pd.Series:
     """Market-implied p-QUANTILE of the outcome over time, front expiry only
     [A1, C4]. p=0.5 is the median; p=0.25/0.75 give the implied IQR.
@@ -286,7 +357,8 @@ def implied_quantile_series(
     as expiries roll, so coverage is continuous; values are in the
     underlying's units (e.g. % or index level).
     """
-    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume)
+    sub = _prepare_market(history, markets, market_name, band, roll_days, min_volume,
+                          expiry_mode=expiry_mode)
     sub = sub.dropna(subset=["strike"])
     if sub.empty:
         raise ValueError(f"no strike data for {market_name!r}")
@@ -307,11 +379,13 @@ def implied_median_series(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    expiry_mode: str = "front",
 ) -> pd.Series:
     """Market-implied MEDIAN outcome (implied_quantile_series at p=0.5)."""
     return implied_quantile_series(history, markets, market_name, p=0.5,
                                    band=band, freq=freq, ffill_limit=ffill_limit,
-                                   roll_days=roll_days, min_volume=min_volume)
+                                   roll_days=roll_days, min_volume=min_volume,
+                                   expiry_mode=expiry_mode)
 
 
 def implied_series(
@@ -324,6 +398,7 @@ def implied_series(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    expiry_mode: str = "front",
 ) -> pd.Series:
     """Dispatch to the chosen implied-signal extractor.
 
@@ -334,7 +409,8 @@ def implied_series(
         raise ValueError(f"unknown signal kind {kind!r} (use 'median' or 'prob')")
     fn = implied_median_series if kind == "median" else implied_prob_series
     return fn(history, markets, market_name, band=band, freq=freq,
-              ffill_limit=ffill_limit, roll_days=roll_days, min_volume=min_volume)
+              ffill_limit=ffill_limit, roll_days=roll_days, min_volume=min_volume,
+              expiry_mode=expiry_mode)
 
 
 # --------------------------------------------------------------------------- #
@@ -344,9 +420,11 @@ SIGNALS_CACHE_VERSION = "sig-v1"   # bump whenever signal construction changes
 
 
 def _sig_cache_path(zip_path: Path, market_name: str, what: str, kind: str,
-                    band, freq, ffill_limit, roll_days, min_volume) -> Path:
+                    band, freq, ffill_limit, roll_days, min_volume,
+                    expiry_mode: str = "front") -> Path:
     import hashlib
-    key = f"{market_name}|{what}|{kind}|{band}|{freq}|{ffill_limit}|{roll_days}|{min_volume}"
+    key = (f"{market_name}|{what}|{kind}|{band}|{freq}|{ffill_limit}|{roll_days}"
+           f"|{min_volume}|{expiry_mode}")
     digest = hashlib.md5(key.encode()).hexdigest()[:12]
     return (CACHE_DIR / f"{zip_path.stem}-{int(zip_path.stat().st_mtime)}"
                         f"-{SIGNALS_CACHE_VERSION}-{digest}.pkl")
@@ -363,6 +441,7 @@ def cached_implied_series(
     ffill_limit: int = DEFAULT_FFILL_LIMIT,
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
+    expiry_mode: str = "front",
 ) -> pd.Series:
     """implied_series with a per-bundle disk cache [F5].
 
@@ -377,12 +456,13 @@ def cached_implied_series(
     cache = None
     if use:
         cache = _sig_cache_path(Path(zip_path), market_name, "series", kind,
-                                band, freq, ffill_limit, roll_days, min_volume)
+                                band, freq, ffill_limit, roll_days, min_volume,
+                                expiry_mode)
         if cache.exists():
             return pd.read_pickle(cache)
     s = implied_series(history, markets, market_name, kind=kind, band=band,
                        freq=freq, ffill_limit=ffill_limit, roll_days=roll_days,
-                       min_volume=min_volume)
+                       min_volume=min_volume, expiry_mode=expiry_mode)
     if cache is not None:
         CACHE_DIR.mkdir(exist_ok=True)
         s.to_pickle(cache)
@@ -400,18 +480,20 @@ def cached_implied_prob_frame(
     roll_days: int = DEFAULT_ROLL_DAYS,
     min_volume: int = 0,
     agg: str = "last",
+    expiry_mode: str = "front",
 ) -> pd.DataFrame:
     """implied_prob_frame with the same per-bundle disk cache [F5]."""
     use = zip_path is not None and Path(zip_path).resolve().parent == REPO_ROOT
     cache = None
     if use:
         cache = _sig_cache_path(Path(zip_path), market_name, f"frame-{agg}", "prob",
-                                band, freq, ffill_limit, roll_days, min_volume)
+                                band, freq, ffill_limit, roll_days, min_volume,
+                                expiry_mode)
         if cache.exists():
             return pd.read_pickle(cache)
     f = implied_prob_frame(history, markets, market_name, band=band, freq=freq,
                            ffill_limit=ffill_limit, roll_days=roll_days,
-                           min_volume=min_volume, agg=agg)
+                           min_volume=min_volume, agg=agg, expiry_mode=expiry_mode)
     if cache is not None:
         CACHE_DIR.mkdir(exist_ok=True)
         f.to_pickle(cache)

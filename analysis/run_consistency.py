@@ -31,11 +31,12 @@ OUT_DIR = sig.out_base() / "consistency"
 
 
 def run(rule_key: str, zip_path: Path, kind: str | None = None, z_window: int = 48,
-        history=None, markets=None) -> Path:
+        history=None, markets=None, expiry_mode: str | None = None) -> Path:
     print(f"Loading bundle: {zip_path.name}  (rule={rule_key}, z_window={z_window}h causal)")
     try:
         panel, roles, rule = rules.build_rule_panel(
-            rule_key, zip_path, z_window, kind=kind, history=history, markets=markets)
+            rule_key, zip_path, z_window, kind=kind, history=history, markets=markets,
+            expiry_mode=expiry_mode)
     except (rules.RuleError, ValueError, KeyError) as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -116,11 +117,14 @@ def main() -> None:
     ap.add_argument("--zip", type=Path, default=None, help="bundle zip (default: latest)")
     ap.add_argument("--signal", choices=["median", "prob"], default=None,
                     help="implied signal override (default: rule's 'signal' key, else median)")
+    ap.add_argument("--expiry-mode", choices=["front", "active"], default=None,
+                    help="expiry tracked per bar (default: mappings defaults.expiry_mode)")
     ap.add_argument("--z-window", type=int, default=48,
                     help="trailing z-score window in hours (causal, no look-ahead)")
     args = ap.parse_args()
     zip_path = args.zip or sig.find_latest_zip()
-    out = run(args.rule, zip_path, kind=args.signal, z_window=args.z_window)
+    out = run(args.rule, zip_path, kind=args.signal, z_window=args.z_window,
+              expiry_mode=args.expiry_mode)
     print(f"\nwrote {out}")
 
 

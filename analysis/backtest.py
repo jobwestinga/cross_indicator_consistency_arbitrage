@@ -267,6 +267,8 @@ def main() -> None:
     ap.add_argument("--rule", default="phillips")
     ap.add_argument("--zip", type=Path, default=None)
     ap.add_argument("--signal", choices=["median", "prob"], default=None)
+    ap.add_argument("--expiry-mode", choices=["front", "active"], default=None,
+                    help="expiry tracked per bar (default: mappings defaults.expiry_mode)")
     ap.add_argument("--z-window", type=int, default=48)
     ap.add_argument("--threshold", type=float, default=None,
                     help="entry threshold on the rule's flag metric (default from mappings)")
@@ -288,7 +290,8 @@ def main() -> None:
     try:
         panel, roles, rule = rules.build_rule_panel(
             args.rule, zip_path, args.z_window, kind=args.signal,
-            min_volume=args.min_volume, with_prices=True, px_agg=args.agg)
+            min_volume=args.min_volume, with_prices=True, px_agg=args.agg,
+            expiry_mode=args.expiry_mode)
     except (rules.RuleError, ValueError, KeyError) as exc:
         raise SystemExit(str(exc)) from exc
     threshold = args.threshold if args.threshold is not None else rules.flag_threshold(rule)

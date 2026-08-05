@@ -69,8 +69,18 @@ def load_api_key() -> str:
     if not key:
         sys.exit("FRED_API_KEY not found in environment or .env")
     if len(key) != 32 or not key.isalnum() or not key.islower():
-        sys.exit(f"FRED_API_KEY looks malformed (must be 32-char lowercase alnum): {key!r}")
+        sys.exit("FRED_API_KEY looks malformed (expected 32-char lowercase alnum)")
     return key
+
+
+def redact(text: object, key: str) -> str:
+    """Strip the API key out of anything we print.
+
+    requests puts the full query string — including api_key — into HTTPError
+    messages, so an unredacted `except ... as exc: print(exc)` leaks the
+    credential into logs, CI output and pasted terminal transcripts.
+    """
+    return str(text).replace(key, "***") if key else str(text)
 
 
 def fetch_series(series_id: str, key: str, output_type: int | None = None) -> list[dict]:
@@ -81,11 +91,14 @@ def fetch_series(series_id: str, key: str, output_type: int | None = None) -> li
         params.update({"output_type": output_type,
                        "realtime_start": "1776-07-04",
                        "realtime_end": "9999-12-31"})
-    resp = requests.get(FRED_BASE, params=params, timeout=30)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(FRED_BASE, params=params, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(redact(exc, key)) from None
     payload = resp.json()
     if "observations" not in payload:
-        raise RuntimeError(f"{series_id}: unexpected response {payload}")
+        raise RuntimeError(f"{series_id}: unexpected response {redact(payload, key)}")
     return payload["observations"]
 
 
@@ -207,10 +220,10 @@ def main() -> None:
                 n_init = store_initial_vintages(conn, sid, initial)
                 tail += f", {n_init} initial vintages"
             except Exception as exc:  # noqa: BLE001
-                tail += f", vintages unavailable ({exc})"
+                tail += f", vintages unavailable ({redact(exc, key)[:80]})"
             print(f"  {sid:10s} {n:6d} obs  ({tail})")
         except Exception as exc:  # noqa: BLE001 - report and continue
-            print(f"  {sid:10s} ERROR: {exc}")
+            print(f"  {sid:10s} ERROR: {redact(exc, key)}")
 
     conn.close()
     print(f"\nWrote {total:,} observations to {DB_PATH}")

@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # runnable from anywhere
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FRED_DB = Path(__file__).resolve().parent / "macro" / "fred.sqlite"
 TODAY = datetime.now(UTC).date()
@@ -145,6 +147,72 @@ def check_ibkr(rep: Report, zip_path: Path | None, max_stale: int) -> None:
              + (f"; missing {missing_days}" if missing_days else ""))
 
 
+def check_rule_legs(rep: Report, zip_path: Path | None, max_stale: int) -> None:
+    """Per-rule leg freshness: is every market a rule depends on still printing?
+
+    A rule whose leg stops printing silently produces "no events" — which the
+    validation/OOS tables would otherwise report as "too few events", i.e.
+    indistinguishable from a live rule that just did not fire.
+
+    NOTE on the contract counts: the export includes only history-backed
+    contracts, so "0 traded contracts" here does NOT mean the venue delisted
+    the market. Verified against the live DB (2026-07-28): US Core PCE had 78
+    ACTIVE contracts upstream, every one of them returning `no_data` — listed
+    but never traded. Treat this section as "is this leg still printing",
+    not as a listing status.
+    """
+    rep.section("Rule legs (markets each rule depends on)")
+    if zip_path is None or not zip_path.exists():
+        rep.line(WARN, "no bundle: skipped")
+        return
+    try:
+        import rules
+        import signals as sig
+
+        cfg = sig.load_mappings()
+        markets = sig.load_markets(zip_path)
+        hist = sig.load_history(zip_path)
+        with zipfile.ZipFile(zip_path) as z:
+            contracts = pd.read_csv(z.open("contracts.csv"),
+                                    usecols=["underlying_conid", "active"])
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break the audit
+        rep.line(WARN, f"skipped ({type(exc).__name__}: {exc})")
+        return
+
+    active_by_conid = contracts.groupby("underlying_conid")["active"].sum()
+    data_end = hist["ts_utc"].max()
+    seen: dict[str, tuple[int, int]] = {}       # market -> (days stale, active contracts)
+    for key in rules.implemented_rules(cfg):
+        for spec in cfg["rules"][key]["indicators"].values():
+            name = spec["market_name"]
+            if name in seen:
+                continue
+            try:
+                conid = sig.resolve_conid(markets, name)
+            except KeyError:
+                seen[name] = (-1, 0)
+                continue
+            rows = hist.loc[hist.underlying_conid == conid, "ts_utc"]
+            stale = (int((data_end - rows.max()).total_seconds() // 86400)
+                     if len(rows) else 9999)
+            seen[name] = (stale, int(active_by_conid.get(conid, 0)))
+
+    for name, (stale, n_active) in sorted(seen.items(), key=lambda kv: -kv[1][0]):
+        users = [k for k in rules.implemented_rules(cfg)
+                 if any(s["market_name"] == name
+                        for s in cfg["rules"][k]["indicators"].values())]
+        if stale < 0:
+            rep.line(WARN, f"{name}: NOT IN BUNDLE (rules: {', '.join(users)})")
+            continue
+        if stale <= max_stale:
+            rep.line(PASS, f"{name}: fresh ({stale}d), {n_active} traded contracts active")
+        else:
+            state = ("no traded contracts left in the bundle" if n_active == 0
+                     else f"{n_active} traded contracts still active")
+            rep.line(WARN, f"{name}: LAST PRINT {stale}d before data end — {state}; "
+                           f"rules affected: {', '.join(users)}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Data-readiness check before inference.")
     ap.add_argument("--zip", type=Path, default=None, help="IBKR export zip (default: latest).")
@@ -155,7 +223,9 @@ def main() -> None:
 
     print(f"Data-readiness check  (today={TODAY})")
     rep = Report()
-    check_ibkr(rep, args.zip or find_latest_zip(), args.max_stale_days)
+    zip_path = args.zip or find_latest_zip()
+    check_ibkr(rep, zip_path, args.max_stale_days)
+    check_rule_legs(rep, zip_path, args.max_stale_days)
     check_fred(rep, args.fred, args.max_stale_days)
 
     print(f"\nOverall: {MARK[rep.worst]} {rep.worst}")

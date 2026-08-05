@@ -199,6 +199,64 @@ Coverage measured in the Apr-30 bundle (rows of YES history):
 - [x] **E12. Lint config.** ruff in pyproject.toml (E4/E7/E9, F, B, UP; repo
   clean as of 2026-07-23) + a Lint step in the tests workflow.
 
+- [x] **A12. Dead-leg detection (found 2026-07-28).** A rule whose leg stops
+  printing produced "no events", which the OOS table reported as
+  "INCONCLUSIVE (too few events)" — indistinguishable from a live rule that
+  simply did not fire. Four of ten rules were in this state (pce_cpi 120d,
+  okun 93d, beveridge 19d, sahm/uip 7d since last print). **Fixes:**
+  `check_readiness.py` gained a "Rule legs" section (per-leg last print +
+  traded-contract count); `oos_test.py` reports `NO OOS DATA (leg stale …)`
+  with `has_oos_data`/`panel_end` fields and no longer emits negative
+  `oos_days`; the report's OOS table shows the same.
+  **Root cause verified against the live VPS DB — NOT a collector bug and NOT
+  a delisting:** those markets are actively listed with fresh contracts, but
+  the venue returns `no_data` for nearly all of them (US Core PCE: 78 of 78
+  active contracts never traded; USDJPY 60/68; JOLTS 57/70). The export only
+  carries history-backed contracts, which is why the bundle looked like a
+  delisting. Real conclusion: only 5 of 10 rules have a live OOS window.
+
+- [x] **A13. Expiry tracking: measured, and deliberately NOT changed
+  (2026-08-03).** `front_expiry_filter` keeps only the nearest unexpired
+  expiry and so discards **52–96% of prints**: US Real GDP 269 rows → 10
+  (which is the whole reason `okun` never produced a score), Fed Funds keeps
+  17%, CPI Yearly 38%. A front expiry that goes quiet mid-life also kills the
+  signal while a later expiry trades (US Recession: front silent from Jun-26,
+  Dec-10 printing Jul-17).
+  Built `active_expiry_filter` + `expiry_mode: front|active` (mappings
+  default, per-indicator override, `--expiry-mode` on the per-rule scripts):
+  tracks the most-traded unexpired expiry, causal and still one expiry per bar
+  so A1 holds. Coverage gains are real (GDP 10 → 258 points, Fed Funds +22%,
+  Recession extends Jun-26 → Jul-17).
+  **A/B verdict (`analysis/expiry_mode_ab.py`): keep `front`.** `active`
+  multiplies expiry switches 4–5× (taylor 10 → 59) and the verdicts move
+  incoherently rather than uniformly improving — taylor's genuine cross-leg
+  structure evaporates (perm p 0.007 → 0.847) while payrolls_labor swings to
+  p = 0.000 and core_headline 0.160 → 0.687. Cause: expiry rolls are
+  SYNCHRONISED across legs (both CPI legs roll on the same release), so
+  cross-leg-aligned jumps inflate significance in a way the circular-shift
+  null cannot reproduce — the A11 hazard at panel scale. `active` stays
+  opt-in; re-run the A/B as data grows.
+- [x] **A14. Roll buffer skipped for single-expiry markets (2026-08-03).**
+  Both expiry filters short-circuited on `len(exps) <= 1` and returned rows
+  *past* the roll cutoff, so single-expiry markets (e.g. US Core PCE) kept
+  settlement-pinned bars the buffer exists to exclude. Now `== 0`, so the
+  cutoff always applies. Pre-existing bug, found by a test written for A13.
+
+- [x] **A15. FDR family restricted to powered rules (2026-08-03).** The BH
+  q-values ran over every rule, including ones the validator itself calls
+  INCONCLUSIVE. On the Aug-03 bundle that produced `pce_cpi` perm p = 0.005 →
+  **q = 0.045 on 2 events** — a significant-looking number in the headline
+  table resting on noise (`okun_canada` likewise p = 0.000 on 2 events).
+  Rules with < 8 events (the validator's own floor) are now excluded from the
+  family and shown as `p (n/a)` with no q.
+- [x] **A16. FRED API key leaked into error output (2026-08-03).** The DFF
+  vintage request returns HTTP 400 (26k-row daily series), and `requests`
+  embeds the full query string — `api_key` included — in the exception
+  message, which `collect_fred.py` printed verbatim to stdout/logs. Added
+  `redact()` over every printed exception/payload plus a test asserting the
+  key never appears. **The existing key appeared in terminal output before
+  the fix and should be rotated.**
+
 ## F. Data & infrastructure extensions
 
 - [x] **F1. Fresh export.** Bundle was Apr-30 (~70d of data); collector has

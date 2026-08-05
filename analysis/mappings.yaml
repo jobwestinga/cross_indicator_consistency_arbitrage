@@ -49,6 +49,16 @@ defaults:
   resample_freq: "1h"   # common grid; markets sit on slightly offset clocks
   ffill_limit: 48       # max bars a value may be carried forward (staleness cap)
   roll_days: 2          # stop tracking an expiry this many days before settlement
+  # Which expiry the signal tracks at each bar (never more than one -> A1):
+  #   front  = nearest unexpired expiry (default; conservative)
+  #   active = most-traded unexpired expiry in a trailing 7d window (causal).
+  # Measured 2026-08-03: `front` discards 52-96% of prints on this venue
+  # (US Real GDP 269 rows -> 10, killing okun; Fed Funds keeps 17%). `active`
+  # recovers most of it, but switches expiry 3-26x per market and each switch
+  # JUMPS the series (same hazard as the A11 reference switch), so it stays
+  # OPT-IN until the A/B in docs/IMPROVEMENTS.md says otherwise.
+  # Per-indicator `expiry_mode:` overrides this for one leg.
+  expiry_mode: front
 
 rules:
   phillips:
